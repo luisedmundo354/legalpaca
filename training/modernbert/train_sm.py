@@ -4,6 +4,37 @@ from transformers import AutoTokenizer, AutoModelForMaskedLM, TrainingArguments
 from dataset_json_pairs import JsonPairDataset
 from model_prefix_suffix import PrefixSuffixModel
 from trainer_contrastive import ContrastiveTrainer
+import numpy as np
+import evaluate
+from transformers import EvalPrediction
+from transformers.utils import logging
+logging.set_verbosity_debug()
+
+# Compute custom classification metrics
+accuracy = evaluate.load("accuracy")
+precisionM = evaluate.load("precision")
+recallM = evaluate.load("recall")
+f1M = evaluate.load("f1")
+
+def compute_metrics(eval_pred: EvalPrediction):
+    logits       = eval_pred.predictions
+    labels       = eval_pred.label_ids
+    preds        = np.argmax(logits, axis=-1)
+
+    acc = accuracy.compute(predictions=preds, references=labels)["accuracy"]
+    prec = precisionM.compute(predictions=preds, references=labels, average="weighted")["precision"]
+    rec = recallM.compute(predictions=preds, references=labels, average="weighted")["recall"]
+    f1 = f1M.compute(predictions=preds, references=labels, average="weighted")["f1"]
+
+    metrics = {
+        "eval_accuracy": acc,
+        "eval_precision": prec,
+        "eval_recall": rec,
+        "eval_f1": f1,
+    }
+
+    trainer.log(metrics)
+    return metrics
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
@@ -64,9 +95,9 @@ if __name__ == '__main__':
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
         learning_rate=args.learning_rate,
-        eval_strategy='epoch',
-        save_strategy='epoch',
-        logging_steps=100,
+        eval_strategy="epoch",
+        save_strategy="epoch",
+        logging_steps=50,
         bf16=True,
         deepspeed=args.deepspeed,
         dataloader_drop_last=True,
@@ -78,6 +109,7 @@ if __name__ == '__main__':
         args=training_args,
         train_dataset=train_ds,
         eval_dataset=val_ds,
+        compute_metrics=compute_metrics,
     )
 
     # Train and save
