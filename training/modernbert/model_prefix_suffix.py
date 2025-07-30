@@ -10,7 +10,7 @@ def infonce_with_ddp(prefix, pos, temp=0.05):
     # L2‑normalise
     prefix, pos = map(lambda t: F.normalize(t, p=2, dim=-1), (prefix, pos))
 
-    print("Prefix device:", prefix.device, "Pos device:", pos.device)
+    # print("Prefix device:", prefix.device, "Pos device:", pos.device)
 
     world_size = ds_comm.get_world_size()
     rank = ds_comm.get_rank()
@@ -23,15 +23,15 @@ def infonce_with_ddp(prefix, pos, temp=0.05):
     logits   = prefix @ pos_all.T / temp
     labels   = torch.arange(prefix.size(0), device=device) + rank * prefix.size(0)
 
-    print("Gathered pos_all device:", pos_all.device)
+    # print("Gathered pos_all device:", pos_all.device)
 
     pre_buf   = [torch.zeros_like(prefix) for _ in range(world_size)]
     ds_comm.all_gather(pre_buf, prefix)
     prefix_all = torch.cat(pre_buf, dim=0)
     logits_t   = pos @ prefix_all.T / temp
 
-    print("DEBUG shapes:", prefix_all.shape, logits.shape, labels.shape)
-    print("Labels device:", labels.device, "Logits device:", logits_t.device, "Logits_t device:", logits_t.device)
+    # print("DEBUG shapes:", prefix_all.shape, logits.shape, labels.shape)
+    # print("Labels device:", labels.device, "Logits device:", logits_t.device, "Logits_t device:", logits_t.device)
 
     return 0.5 * (F.cross_entropy(logits, labels) +
                   F.cross_entropy(logits_t, labels))
