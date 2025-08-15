@@ -25,7 +25,9 @@ def load_annotations(json_path):
         data = json.load(f)
     plain = data['document'].get('plainText', '')
     anns = data.get('annotations', [])
-    return plain, anns
+    # Get the doc name from name or fall back to filename
+    doc_name = data['document'].get('name') or os.path.splitext(os.path.basename(json_path))[0]
+    return plain, anns, doc_name
 
 
 def build_chain_map(annotations):
@@ -170,7 +172,7 @@ def split_sentences(text):
     return chunks
 
 
-def build_training_examples(plain, chains, id2ann):
+def build_training_examples(plain, chains, id2ann, doc_id):
     examples = []
     for chain in chains:
         # markup full chain
@@ -178,10 +180,15 @@ def build_training_examples(plain, chains, id2ann):
         # for each position, mask it
         for idx, span_markup in enumerate(marked):
             prefix = marked.copy()
-            prefix[idx] = '<mask>'
+            prefix[idx] = '[MASK]'
+
+            ann = id2ann[chain[idx]]
+            pos_text = plain[ann['start']:ann['end']]
+
             examples.append({
                 'prefix': ' '.join(prefix),
-                'positive': span_markup
+                'positive': pos_text,
+                'doc_id': doc_id,
             })
     return examples
 
@@ -193,9 +200,9 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
 
     for path in glob.glob(os.path.join(src_dir, '*.json')):
-        plain, anns = load_annotations(path)
+        plain, anns, doc_id = load_annotations(path)
         chains, id2ann = build_chain_map(anns)
-        examples = build_training_examples(plain, chains, id2ann)
+        examples = build_training_examples(plain, chains, id2ann, doc_id)
         targets = split_sentences(plain)
 
         fname = os.path.splitext(os.path.basename(path))[0] + '_train.json'

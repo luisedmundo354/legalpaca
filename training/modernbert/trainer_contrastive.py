@@ -23,6 +23,8 @@ class ContrastiveTrainer(Trainer):
         pos    = {k[4:]: v.to(device) for k, v in inputs.items()
                   if k.startswith("pos_")}
 
+        doc_ids = inputs["doc_id"].to(device)
+
         pid = prefix.get('input_ids')
         pam = prefix.get('attention_mask')
         # print(f"DEBUG shapes: {pid.shape}, {pam.shape}")
@@ -59,7 +61,7 @@ class ContrastiveTrainer(Trainer):
         # print(f"DBG emb_p/emb_s shapes: {emb_p.shape}, {emb_s.shape}")
 
         # use the temperature stored on the PrefixSuffixModel instance
-        loss = infonce_with_ddp(emb_p, emb_s, temp=model.module.temp)
+        loss = infonce_with_ddp(emb_p, emb_s, doc_ids, temp=model.module.temp)
         loss = loss.to(self.args.device)
         return (loss, {"loss": loss}) if return_outputs else loss
 
@@ -75,6 +77,7 @@ class ContrastiveTrainer(Trainer):
         device = next(model.parameters()).device
         prefix = {k[7:]: v.to(device) for k, v in inputs.items() if k.startswith("prefix_")}
         pos    = {k[4:]: v.to(device) for k, v in inputs.items() if k.startswith("pos_")}
+        doc_ids = inputs["doc_id"].to(device)
 
         # forward
         emb_p = model.prefix_enc(**prefix,
@@ -85,11 +88,21 @@ class ContrastiveTrainer(Trainer):
                                         return_dict=True).hidden_states[-1][:, 0, :]
 
         world = comm.get_world_size()
+
+        buf_ids = [torch.zeros_like(doc_ids) for _ in range(world)]
+
         gather_p, gather_s = [torch.zeros_like(emb_p) for _ in range(world)], [torch.zeros_like(emb_s) for _ in range(world)]
+
         comm.all_gather(gather_p, emb_p); comm.all_gather(gather_s, emb_s)
+        comm.all_gather(buf_ids, doc_ids)
+
         emb_s_all = torch.cat(gather_s, dim=0)
+        ids_all = torch.cat(buf_ids, dim=0)
 
         logits = emb_p @ emb_s_all.T / model.temp
+        mask = doc_ids.unsqueeze(1).eq(ids_all)
+        logits.masked_fill_(mask, float('-inf'))
+
         labels = torch.arange(emb_p.size(0), device=device) + comm.get_rank()*emb_p.size(0)
 
         loss   = None

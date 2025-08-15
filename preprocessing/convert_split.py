@@ -37,7 +37,7 @@ def main():
 
     # --- 3️⃣  aggregate examples per split ------------------------------------
     buckets = {k: [] for k in ["train", "val", "test"]}
-    corpus_lines = []                       # optional: accumulate target_set strings
+    corpus_docs = []                       # optional: accumulate target_set strings
 
     for fname in files:
         with open(os.path.join(args.input_dir, fname), encoding="utf-8") as fh:
@@ -48,11 +48,23 @@ def main():
 
         split = next(k for k, bag in splits_by_file.items() if fname in bag)
         for ex in examples:
-            buckets[split].append({"prefix": ex["prefix"], "positive": ex["positive"]})
+            buckets[split].append({
+            "prefix":  ex["prefix"],
+            "positive": ex["positive"],
+            "doc_id":  ex["doc_id"],
+        })
 
-        corpus_lines.extend(target_set)     # we keep *all* lines for evaluation
+        doc_ids = {ex.get("doc_id") for ex in examples if "doc_id" in ex}
+        doc_id = doc_ids.pop() if len(doc_ids) == 1 else None
 
-    # --- 4️⃣  write out jsonl files -------------------------------------------
+        if doc_id is None:
+            print(f"WARNING: {fname} has 0 or >1 doc_id: {doc_ids}")
+            continue
+
+        case_text = [s.strip() for s in target_set if s.strip()]
+        corpus_docs.append({"case_text": case_text, "doc_id": doc_id})
+
+    # Write out jsonl files
     out_path = pathlib.Path(args.outdir)
     out_path.mkdir(parents=True, exist_ok=True)
 
@@ -64,9 +76,12 @@ def main():
         print(f"{split:>5s}: wrote {len(rows):,} lines to {outfile}")
 
     # also dump the evaluation corpus once
-    if corpus_lines:
-        corpus_file = out_path / "target_set.txt"
-        corpus_file.write_text("\n".join(corpus_lines), encoding="utf-8")
+
+    if corpus_docs:
+        corpus_file = out_path / "target_set.jsonl"
+        with corpus_file.open("w", encoding="utf-8") as fh:
+            for rec in corpus_docs:
+                fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
         print(f"Saved full evaluation corpus → {corpus_file}")
 
 if __name__ == "__main__":
