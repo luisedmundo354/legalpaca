@@ -3,7 +3,7 @@ from torch.distributed.nn.functional import all_gather
 import torch.distributed as dist
 from deepspeed import comm as ds_comm
 
-def infonce_with_ddp(prefix, pos, temp=0.05):
+def infonce_with_ddp(prefix, pos, doc_ids, temp=0.05):
     device = prefix.device
     pos = pos.to(device)
 
@@ -15,12 +15,25 @@ def infonce_with_ddp(prefix, pos, temp=0.05):
     world_size = ds_comm.get_world_size()
     rank = ds_comm.get_rank()
 
+    ids_buf = [torch.zeros_like(doc_ids) for _ in range(world_size)]
+    ds_comm.all_gather(ids_buf, doc_ids)
+    ids_all = torch.cat(ids_buf, dim=0)
+
+    b_global = ids_all.size(0)
+    row_idx = torch.arange(doc_ids.size(0), device=device) + rank * doc_ids.size(0)
+    mask = doc_ids.unsqueeze(1).eq(ids_all) & row_idx.unsqueeze(1).ne(torch.arange(b_global, device=device))
+
+    # print("mask %true:", mask.float().mean().item())
+
     # all‑gather pos
     pos_buf   = [torch.zeros_like(pos) for _ in range(world_size)]
     ds_comm.all_gather(pos_buf, pos)
     pos_all   = torch.cat(pos_buf, dim=0)
 
     logits   = prefix @ pos_all.T / temp
+
+    logits.masked_fill_(mask, float('-inf'))
+
     labels   = torch.arange(prefix.size(0), device=device) + rank * prefix.size(0)
 
     # print("Gathered pos_all device:", pos_all.device)
@@ -30,8 +43,16 @@ def infonce_with_ddp(prefix, pos, temp=0.05):
     prefix_all = torch.cat(pre_buf, dim=0)
     logits_t   = pos @ prefix_all.T / temp
 
+    logits_t.masked_fill_(mask, float('-inf'))
+
     # print("DEBUG shapes:", prefix_all.shape, logits.shape, labels.shape)
     # print("Labels device:", labels.device, "Logits device:", logits_t.device, "Logits_t device:", logits_t.device)
+
+
+    # finite = torch.isfinite(logits).sum(1)
+    # assert (finite > 1).all(), "still masking positives!"
+    # print("initial loss:", F.cross_entropy(logits, labels).item())
+
 
     return 0.5 * (F.cross_entropy(logits, labels) +
                   F.cross_entropy(logits_t, labels))
@@ -54,11 +75,12 @@ class PrefixSuffixModel(torch.nn.Module):
                 prefix_attention_mask=None,
                 pos_input_ids=None,
                 pos_attention_mask=None,
+                doc_id=None,
                 **unused,
     ):
         return {
                 "prefix_input_ids": prefix_input_ids,
                 "prefix_attention_mask": prefix_attention_mask,
                 "pos_input_ids": pos_input_ids,
-                "pos_attention_mask": pos_attention_mask,
+                "pos_attention_mask": pos_attention_mask
             }

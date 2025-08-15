@@ -1,256 +1,319 @@
 {
   "examples": [
     {
-      "prefix": "<mask> <TYPE_factual id=A1 antecedents=A2> It should be noted that the decision-making nature of the 2004 letter, even if that were established, has no bearing on the lawfulness of the decision at issue.</TYPE_factual> <TYPE_conclusion id=A4 antecedents=A1> Consequently, the first ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_factual id=A2> In that regard, the General Court held, in paragraph 59 of the judgment under appeal, having regard to the information available to it, that the scheme for the promotion of electricity production from RES, which was notified in 2014 and which gave rise to the decision at issue, was substantially different from the provisional scheme as set out in the 2003 draft law which was the subject of the 2004 letter.</TYPE_factual>"
+      "prefix": "[MASK] <TYPE_factual id=A1 antecedents=A2> It should be noted that the decision-making nature of the 2004 letter, even if that were established, has no bearing on the lawfulness of the decision at issue.</TYPE_factual> <TYPE_conclusion id=A4 antecedents=A1> Consequently, the first ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": " In that regard, the General Court held, in paragraph 59 of the judgment under appeal, having regard to the information available to it, that the scheme for the promotion of electricity production from RES, which was notified in 2014 and which gave rise to the decision at issue, was substantially different from the provisional scheme as set out in the 2003 draft law which was the subject of the 2004 letter.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_factual id=A2> In that regard, the General Court held, in paragraph 59 of the judgment under appeal, having regard to the information available to it, that the scheme for the promotion of electricity production from RES, which was notified in 2014 and which gave rise to the decision at issue, was substantially different from the provisional scheme as set out in the 2003 draft law which was the subject of the 2004 letter.</TYPE_factual> <mask> <TYPE_conclusion id=A4 antecedents=A1> Consequently, the first ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_factual id=A1 antecedents=A2> It should be noted that the decision-making nature of the 2004 letter, even if that were established, has no bearing on the lawfulness of the decision at issue.</TYPE_factual>"
+      "prefix": "<TYPE_factual id=A2> In that regard, the General Court held, in paragraph 59 of the judgment under appeal, having regard to the information available to it, that the scheme for the promotion of electricity production from RES, which was notified in 2014 and which gave rise to the decision at issue, was substantially different from the provisional scheme as set out in the 2003 draft law which was the subject of the 2004 letter.</TYPE_factual> [MASK] <TYPE_conclusion id=A4 antecedents=A1> Consequently, the first ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": " It should be noted that the decision-making nature of the 2004 letter, even if that were established, has no bearing on the lawfulness of the decision at issue.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_factual id=A2> In that regard, the General Court held, in paragraph 59 of the judgment under appeal, having regard to the information available to it, that the scheme for the promotion of electricity production from RES, which was notified in 2014 and which gave rise to the decision at issue, was substantially different from the provisional scheme as set out in the 2003 draft law which was the subject of the 2004 letter.</TYPE_factual> <TYPE_factual id=A1 antecedents=A2> It should be noted that the decision-making nature of the 2004 letter, even if that were established, has no bearing on the lawfulness of the decision at issue.</TYPE_factual> <mask>",
-      "positive": "<TYPE_conclusion id=A4 antecedents=A1> Consequently, the first ground of appeal must be rejected.</TYPE_conclusion>"
+      "prefix": "<TYPE_factual id=A2> In that regard, the General Court held, in paragraph 59 of the judgment under appeal, having regard to the information available to it, that the scheme for the promotion of electricity production from RES, which was notified in 2014 and which gave rise to the decision at issue, was substantially different from the provisional scheme as set out in the 2003 draft law which was the subject of the 2004 letter.</TYPE_factual> <TYPE_factual id=A1 antecedents=A2> It should be noted that the decision-making nature of the 2004 letter, even if that were established, has no bearing on the lawfulness of the decision at issue.</TYPE_factual> [MASK]",
+      "positive": " Consequently, the first ground of appeal must be rejected.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<mask> <TYPE_legal_and_factual id=B5 antecedents=B1|B2|B3|B4> Consequently, the General Court correctly applied Article 84(1) of its Rules of Procedure by rejecting that plea on the ground that it was out of time.</TYPE_legal_and_factual> <TYPE_conclusion id=B6 antecedents=B5> It follows that the second ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_factual id=B1> The plea in the application at first instance alleging that the Commission had found, in the 2006 decision, that the Czech scheme for the promotion of electricity production from RES did not constitute State aid and that, consequently, that institution could not have decided to the contrary by the decision at issue, was rejected by the General Court in paragraph 60 of the judgment under appeal, inter alia, on the ground that it had been put before it for the first time only in the reply and that, as a result, it constituted a new inadmissible plea.</TYPE_factual>"
+      "prefix": "[MASK] <TYPE_legal_and_factual id=B5 antecedents=B1|B2|B3|B4> Consequently, the General Court correctly applied Article 84(1) of its Rules of Procedure by rejecting that plea on the ground that it was out of time.</TYPE_legal_and_factual> <TYPE_conclusion id=B6 antecedents=B5> It follows that the second ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": " The plea in the application at first instance alleging that the Commission had found, in the 2006 decision, that the Czech scheme for the promotion of electricity production from RES did not constitute State aid and that, consequently, that institution could not have decided to the contrary by the decision at issue, was rejected by the General Court in paragraph 60 of the judgment under appeal, inter alia, on the ground that it had been put before it for the first time only in the reply and that, as a result, it constituted a new inadmissible plea.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_factual id=B1> The plea in the application at first instance alleging that the Commission had found, in the 2006 decision, that the Czech scheme for the promotion of electricity production from RES did not constitute State aid and that, consequently, that institution could not have decided to the contrary by the decision at issue, was rejected by the General Court in paragraph 60 of the judgment under appeal, inter alia, on the ground that it had been put before it for the first time only in the reply and that, as a result, it constituted a new inadmissible plea.</TYPE_factual> <mask> <TYPE_conclusion id=B6 antecedents=B5> It follows that the second ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_legal_and_factual id=B5 antecedents=B1|B2|B3|B4> Consequently, the General Court correctly applied Article 84(1) of its Rules of Procedure by rejecting that plea on the ground that it was out of time.</TYPE_legal_and_factual>"
+      "prefix": "<TYPE_factual id=B1> The plea in the application at first instance alleging that the Commission had found, in the 2006 decision, that the Czech scheme for the promotion of electricity production from RES did not constitute State aid and that, consequently, that institution could not have decided to the contrary by the decision at issue, was rejected by the General Court in paragraph 60 of the judgment under appeal, inter alia, on the ground that it had been put before it for the first time only in the reply and that, as a result, it constituted a new inadmissible plea.</TYPE_factual> [MASK] <TYPE_conclusion id=B6 antecedents=B5> It follows that the second ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": " Consequently, the General Court correctly applied Article 84(1) of its Rules of Procedure by rejecting that plea on the ground that it was out of time.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_factual id=B1> The plea in the application at first instance alleging that the Commission had found, in the 2006 decision, that the Czech scheme for the promotion of electricity production from RES did not constitute State aid and that, consequently, that institution could not have decided to the contrary by the decision at issue, was rejected by the General Court in paragraph 60 of the judgment under appeal, inter alia, on the ground that it had been put before it for the first time only in the reply and that, as a result, it constituted a new inadmissible plea.</TYPE_factual> <TYPE_legal_and_factual id=B5 antecedents=B1|B2|B3|B4> Consequently, the General Court correctly applied Article 84(1) of its Rules of Procedure by rejecting that plea on the ground that it was out of time.</TYPE_legal_and_factual> <mask>",
-      "positive": "<TYPE_conclusion id=B6 antecedents=B5> It follows that the second ground of appeal must be rejected.</TYPE_conclusion>"
+      "prefix": "<TYPE_factual id=B1> The plea in the application at first instance alleging that the Commission had found, in the 2006 decision, that the Czech scheme for the promotion of electricity production from RES did not constitute State aid and that, consequently, that institution could not have decided to the contrary by the decision at issue, was rejected by the General Court in paragraph 60 of the judgment under appeal, inter alia, on the ground that it had been put before it for the first time only in the reply and that, as a result, it constituted a new inadmissible plea.</TYPE_factual> <TYPE_legal_and_factual id=B5 antecedents=B1|B2|B3|B4> Consequently, the General Court correctly applied Article 84(1) of its Rules of Procedure by rejecting that plea on the ground that it was out of time.</TYPE_legal_and_factual> [MASK]",
+      "positive": " It follows that the second ground of appeal must be rejected.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<mask> <TYPE_legal_and_factual id=B5 antecedents=B1|B2|B3|B4> Consequently, the General Court correctly applied Article 84(1) of its Rules of Procedure by rejecting that plea on the ground that it was out of time.</TYPE_legal_and_factual> <TYPE_conclusion id=B6 antecedents=B5> It follows that the second ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_factual id=B2> It is common ground that that plea was only put forward for the first time in the reply.</TYPE_factual>"
+      "prefix": "[MASK] <TYPE_legal_and_factual id=B5 antecedents=B1|B2|B3|B4> Consequently, the General Court correctly applied Article 84(1) of its Rules of Procedure by rejecting that plea on the ground that it was out of time.</TYPE_legal_and_factual> <TYPE_conclusion id=B6 antecedents=B5> It follows that the second ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": " It is common ground that that plea was only put forward for the first time in the reply.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_factual id=B2> It is common ground that that plea was only put forward for the first time in the reply.</TYPE_factual> <mask> <TYPE_conclusion id=B6 antecedents=B5> It follows that the second ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_legal_and_factual id=B5 antecedents=B1|B2|B3|B4> Consequently, the General Court correctly applied Article 84(1) of its Rules of Procedure by rejecting that plea on the ground that it was out of time.</TYPE_legal_and_factual>"
+      "prefix": "<TYPE_factual id=B2> It is common ground that that plea was only put forward for the first time in the reply.</TYPE_factual> [MASK] <TYPE_conclusion id=B6 antecedents=B5> It follows that the second ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": " Consequently, the General Court correctly applied Article 84(1) of its Rules of Procedure by rejecting that plea on the ground that it was out of time.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_factual id=B2> It is common ground that that plea was only put forward for the first time in the reply.</TYPE_factual> <TYPE_legal_and_factual id=B5 antecedents=B1|B2|B3|B4> Consequently, the General Court correctly applied Article 84(1) of its Rules of Procedure by rejecting that plea on the ground that it was out of time.</TYPE_legal_and_factual> <mask>",
-      "positive": "<TYPE_conclusion id=B6 antecedents=B5> It follows that the second ground of appeal must be rejected.</TYPE_conclusion>"
+      "prefix": "<TYPE_factual id=B2> It is common ground that that plea was only put forward for the first time in the reply.</TYPE_factual> <TYPE_legal_and_factual id=B5 antecedents=B1|B2|B3|B4> Consequently, the General Court correctly applied Article 84(1) of its Rules of Procedure by rejecting that plea on the ground that it was out of time.</TYPE_legal_and_factual> [MASK]",
+      "positive": " It follows that the second ground of appeal must be rejected.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<mask> <TYPE_legal_and_factual id=B5 antecedents=B1|B2|B3|B4> Consequently, the General Court correctly applied Article 84(1) of its Rules of Procedure by rejecting that plea on the ground that it was out of time.</TYPE_legal_and_factual> <TYPE_conclusion id=B6 antecedents=B5> It follows that the second ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_legal_and_factual id=B3 Argument_scheme=Argument from Verbal Classification> Furthermore, contrary to what the appellants claim, it cannot be regarded as the extension of the first plea in the action before the General Court, which alleged that the 2004 letter, by which the Commission had adopted a position on the proposed scheme for the promotion of electricity production from RES, was a decision.</TYPE_legal_and_factual>"
+      "prefix": "[MASK] <TYPE_legal_and_factual id=B5 antecedents=B1|B2|B3|B4> Consequently, the General Court correctly applied Article 84(1) of its Rules of Procedure by rejecting that plea on the ground that it was out of time.</TYPE_legal_and_factual> <TYPE_conclusion id=B6 antecedents=B5> It follows that the second ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": " Furthermore, contrary to what the appellants claim, it cannot be regarded as the extension of the first plea in the action before the General Court, which alleged that the 2004 letter, by which the Commission had adopted a position on the proposed scheme for the promotion of electricity production from RES, was a decision.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_legal_and_factual id=B3 Argument_scheme=Argument from Verbal Classification> Furthermore, contrary to what the appellants claim, it cannot be regarded as the extension of the first plea in the action before the General Court, which alleged that the 2004 letter, by which the Commission had adopted a position on the proposed scheme for the promotion of electricity production from RES, was a decision.</TYPE_legal_and_factual> <mask> <TYPE_conclusion id=B6 antecedents=B5> It follows that the second ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_legal_and_factual id=B5 antecedents=B1|B2|B3|B4> Consequently, the General Court correctly applied Article 84(1) of its Rules of Procedure by rejecting that plea on the ground that it was out of time.</TYPE_legal_and_factual>"
+      "prefix": "<TYPE_legal_and_factual id=B3 Argument_scheme=Argument from Verbal Classification> Furthermore, contrary to what the appellants claim, it cannot be regarded as the extension of the first plea in the action before the General Court, which alleged that the 2004 letter, by which the Commission had adopted a position on the proposed scheme for the promotion of electricity production from RES, was a decision.</TYPE_legal_and_factual> [MASK] <TYPE_conclusion id=B6 antecedents=B5> It follows that the second ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": " Consequently, the General Court correctly applied Article 84(1) of its Rules of Procedure by rejecting that plea on the ground that it was out of time.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_legal_and_factual id=B3 Argument_scheme=Argument from Verbal Classification> Furthermore, contrary to what the appellants claim, it cannot be regarded as the extension of the first plea in the action before the General Court, which alleged that the 2004 letter, by which the Commission had adopted a position on the proposed scheme for the promotion of electricity production from RES, was a decision.</TYPE_legal_and_factual> <TYPE_legal_and_factual id=B5 antecedents=B1|B2|B3|B4> Consequently, the General Court correctly applied Article 84(1) of its Rules of Procedure by rejecting that plea on the ground that it was out of time.</TYPE_legal_and_factual> <mask>",
-      "positive": "<TYPE_conclusion id=B6 antecedents=B5> It follows that the second ground of appeal must be rejected.</TYPE_conclusion>"
+      "prefix": "<TYPE_legal_and_factual id=B3 Argument_scheme=Argument from Verbal Classification> Furthermore, contrary to what the appellants claim, it cannot be regarded as the extension of the first plea in the action before the General Court, which alleged that the 2004 letter, by which the Commission had adopted a position on the proposed scheme for the promotion of electricity production from RES, was a decision.</TYPE_legal_and_factual> <TYPE_legal_and_factual id=B5 antecedents=B1|B2|B3|B4> Consequently, the General Court correctly applied Article 84(1) of its Rules of Procedure by rejecting that plea on the ground that it was out of time.</TYPE_legal_and_factual> [MASK]",
+      "positive": " It follows that the second ground of appeal must be rejected.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<mask> <TYPE_legal_and_factual id=B5 antecedents=B1|B2|B3|B4> Consequently, the General Court correctly applied Article 84(1) of its Rules of Procedure by rejecting that plea on the ground that it was out of time.</TYPE_legal_and_factual> <TYPE_conclusion id=B6 antecedents=B5> It follows that the second ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_factual id=B4> Moreover, the appellants were not in a position, either before the Court of Justice or the General Court, to provide reasons why that plea could not have been put forward earlier.</TYPE_factual>"
+      "prefix": "[MASK] <TYPE_legal_and_factual id=B5 antecedents=B1|B2|B3|B4> Consequently, the General Court correctly applied Article 84(1) of its Rules of Procedure by rejecting that plea on the ground that it was out of time.</TYPE_legal_and_factual> <TYPE_conclusion id=B6 antecedents=B5> It follows that the second ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": " Moreover, the appellants were not in a position, either before the Court of Justice or the General Court, to provide reasons why that plea could not have been put forward earlier.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_factual id=B4> Moreover, the appellants were not in a position, either before the Court of Justice or the General Court, to provide reasons why that plea could not have been put forward earlier.</TYPE_factual> <mask> <TYPE_conclusion id=B6 antecedents=B5> It follows that the second ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_legal_and_factual id=B5 antecedents=B1|B2|B3|B4> Consequently, the General Court correctly applied Article 84(1) of its Rules of Procedure by rejecting that plea on the ground that it was out of time.</TYPE_legal_and_factual>"
+      "prefix": "<TYPE_factual id=B4> Moreover, the appellants were not in a position, either before the Court of Justice or the General Court, to provide reasons why that plea could not have been put forward earlier.</TYPE_factual> [MASK] <TYPE_conclusion id=B6 antecedents=B5> It follows that the second ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": " Consequently, the General Court correctly applied Article 84(1) of its Rules of Procedure by rejecting that plea on the ground that it was out of time.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_factual id=B4> Moreover, the appellants were not in a position, either before the Court of Justice or the General Court, to provide reasons why that plea could not have been put forward earlier.</TYPE_factual> <TYPE_legal_and_factual id=B5 antecedents=B1|B2|B3|B4> Consequently, the General Court correctly applied Article 84(1) of its Rules of Procedure by rejecting that plea on the ground that it was out of time.</TYPE_legal_and_factual> <mask>",
-      "positive": "<TYPE_conclusion id=B6 antecedents=B5> It follows that the second ground of appeal must be rejected.</TYPE_conclusion>"
+      "prefix": "<TYPE_factual id=B4> Moreover, the appellants were not in a position, either before the Court of Justice or the General Court, to provide reasons why that plea could not have been put forward earlier.</TYPE_factual> <TYPE_legal_and_factual id=B5 antecedents=B1|B2|B3|B4> Consequently, the General Court correctly applied Article 84(1) of its Rules of Procedure by rejecting that plea on the ground that it was out of time.</TYPE_legal_and_factual> [MASK]",
+      "positive": " It follows that the second ground of appeal must be rejected.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<mask> <TYPE_factual id=C5 antecedents=C1|C2|C4> Therefore, the General Court did not err in its legal characterisation by holding in paragraph 70 of the judgment under appeal that that letter could not give rise to any legitimate expectation.</TYPE_factual> <TYPE_conclusion id=C12 antecedents=C5|C6|C7|C9>It follows from the foregoing that the third ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_legal id=C1 Argument_scheme=Argument from Precedent> According to the case-law of the Court of Justice, for infringement of the principle of the protection of legitimate expectations to be established, it is necessary for an EU institution, by giving a citizen precise assurances, to have led that person to entertain justified expectations.</TYPE_legal>"
+      "prefix": "[MASK] <TYPE_factual id=C5 antecedents=C1|C2|C4> Therefore, the General Court did not err in its legal characterisation by holding in paragraph 70 of the judgment under appeal that that letter could not give rise to any legitimate expectation.</TYPE_factual> <TYPE_conclusion id=C12 antecedents=C5|C6|C7|C9>It follows from the foregoing that the third ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": " According to the case-law of the Court of Justice, for infringement of the principle of the protection of legitimate expectations to be established, it is necessary for an EU institution, by giving a citizen precise assurances, to have led that person to entertain justified expectations.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_legal id=C1 Argument_scheme=Argument from Precedent> According to the case-law of the Court of Justice, for infringement of the principle of the protection of legitimate expectations to be established, it is necessary for an EU institution, by giving a citizen precise assurances, to have led that person to entertain justified expectations.</TYPE_legal> <mask> <TYPE_conclusion id=C12 antecedents=C5|C6|C7|C9>It follows from the foregoing that the third ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_factual id=C5 antecedents=C1|C2|C4> Therefore, the General Court did not err in its legal characterisation by holding in paragraph 70 of the judgment under appeal that that letter could not give rise to any legitimate expectation.</TYPE_factual>"
+      "prefix": "<TYPE_legal id=C1 Argument_scheme=Argument from Precedent> According to the case-law of the Court of Justice, for infringement of the principle of the protection of legitimate expectations to be established, it is necessary for an EU institution, by giving a citizen precise assurances, to have led that person to entertain justified expectations.</TYPE_legal> [MASK] <TYPE_conclusion id=C12 antecedents=C5|C6|C7|C9>It follows from the foregoing that the third ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": " Therefore, the General Court did not err in its legal characterisation by holding in paragraph 70 of the judgment under appeal that that letter could not give rise to any legitimate expectation.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_legal id=C1 Argument_scheme=Argument from Precedent> According to the case-law of the Court of Justice, for infringement of the principle of the protection of legitimate expectations to be established, it is necessary for an EU institution, by giving a citizen precise assurances, to have led that person to entertain justified expectations.</TYPE_legal> <TYPE_factual id=C5 antecedents=C1|C2|C4> Therefore, the General Court did not err in its legal characterisation by holding in paragraph 70 of the judgment under appeal that that letter could not give rise to any legitimate expectation.</TYPE_factual> <mask>",
-      "positive": "<TYPE_conclusion id=C12 antecedents=C5|C6|C7|C9>It follows from the foregoing that the third ground of appeal must be rejected.</TYPE_conclusion>"
+      "prefix": "<TYPE_legal id=C1 Argument_scheme=Argument from Precedent> According to the case-law of the Court of Justice, for infringement of the principle of the protection of legitimate expectations to be established, it is necessary for an EU institution, by giving a citizen precise assurances, to have led that person to entertain justified expectations.</TYPE_legal> <TYPE_factual id=C5 antecedents=C1|C2|C4> Therefore, the General Court did not err in its legal characterisation by holding in paragraph 70 of the judgment under appeal that that letter could not give rise to any legitimate expectation.</TYPE_factual> [MASK]",
+      "positive": "It follows from the foregoing that the third ground of appeal must be rejected.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<mask> <TYPE_factual id=C5 antecedents=C1|C2|C4> Therefore, the General Court did not err in its legal characterisation by holding in paragraph 70 of the judgment under appeal that that letter could not give rise to any legitimate expectation.</TYPE_factual> <TYPE_conclusion id=C12 antecedents=C5|C6|C7|C9>It follows from the foregoing that the third ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_legal id=C2 Argument_scheme=Argument from Precedent>Information which is precise, unconditional and consistent, in whatever form it is given, constitutes such assurances (judgment of 12 October 2016, Land Hessen v Pollmeier Massivholz, C‑242/15 P, not published, EU:C:2016:765, paragraph 63).</TYPE_legal>"
+      "prefix": "[MASK] <TYPE_factual id=C5 antecedents=C1|C2|C4> Therefore, the General Court did not err in its legal characterisation by holding in paragraph 70 of the judgment under appeal that that letter could not give rise to any legitimate expectation.</TYPE_factual> <TYPE_conclusion id=C12 antecedents=C5|C6|C7|C9>It follows from the foregoing that the third ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": "Information which is precise, unconditional and consistent, in whatever form it is given, constitutes such assurances (judgment of 12 October 2016, Land Hessen v Pollmeier Massivholz, C‑242/15 P, not published, EU:C:2016:765, paragraph 63).",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_legal id=C2 Argument_scheme=Argument from Precedent>Information which is precise, unconditional and consistent, in whatever form it is given, constitutes such assurances (judgment of 12 October 2016, Land Hessen v Pollmeier Massivholz, C‑242/15 P, not published, EU:C:2016:765, paragraph 63).</TYPE_legal> <mask> <TYPE_conclusion id=C12 antecedents=C5|C6|C7|C9>It follows from the foregoing that the third ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_factual id=C5 antecedents=C1|C2|C4> Therefore, the General Court did not err in its legal characterisation by holding in paragraph 70 of the judgment under appeal that that letter could not give rise to any legitimate expectation.</TYPE_factual>"
+      "prefix": "<TYPE_legal id=C2 Argument_scheme=Argument from Precedent>Information which is precise, unconditional and consistent, in whatever form it is given, constitutes such assurances (judgment of 12 October 2016, Land Hessen v Pollmeier Massivholz, C‑242/15 P, not published, EU:C:2016:765, paragraph 63).</TYPE_legal> [MASK] <TYPE_conclusion id=C12 antecedents=C5|C6|C7|C9>It follows from the foregoing that the third ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": " Therefore, the General Court did not err in its legal characterisation by holding in paragraph 70 of the judgment under appeal that that letter could not give rise to any legitimate expectation.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_legal id=C2 Argument_scheme=Argument from Precedent>Information which is precise, unconditional and consistent, in whatever form it is given, constitutes such assurances (judgment of 12 October 2016, Land Hessen v Pollmeier Massivholz, C‑242/15 P, not published, EU:C:2016:765, paragraph 63).</TYPE_legal> <TYPE_factual id=C5 antecedents=C1|C2|C4> Therefore, the General Court did not err in its legal characterisation by holding in paragraph 70 of the judgment under appeal that that letter could not give rise to any legitimate expectation.</TYPE_factual> <mask>",
-      "positive": "<TYPE_conclusion id=C12 antecedents=C5|C6|C7|C9>It follows from the foregoing that the third ground of appeal must be rejected.</TYPE_conclusion>"
+      "prefix": "<TYPE_legal id=C2 Argument_scheme=Argument from Precedent>Information which is precise, unconditional and consistent, in whatever form it is given, constitutes such assurances (judgment of 12 October 2016, Land Hessen v Pollmeier Massivholz, C‑242/15 P, not published, EU:C:2016:765, paragraph 63).</TYPE_legal> <TYPE_factual id=C5 antecedents=C1|C2|C4> Therefore, the General Court did not err in its legal characterisation by holding in paragraph 70 of the judgment under appeal that that letter could not give rise to any legitimate expectation.</TYPE_factual> [MASK]",
+      "positive": "It follows from the foregoing that the third ground of appeal must be rejected.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<mask> <TYPE_factual id=C4 antecedents=C3> Consequently, that letter did not give precise assurances that the initial scheme was not in the nature of State aid.</TYPE_factual> <TYPE_factual id=C5 antecedents=C1|C2|C4> Therefore, the General Court did not err in its legal characterisation by holding in paragraph 70 of the judgment under appeal that that letter could not give rise to any legitimate expectation.</TYPE_factual> <TYPE_conclusion id=C12 antecedents=C5|C6|C7|C9>It follows from the foregoing that the third ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_factual id=C3> In that regard, in its 2004 letter, the Commission merely expressed a preliminary opinion on a draft of the promotion scheme which was adopted only the following year, the precise conditions of which were not then fully known.</TYPE_factual>"
+      "prefix": "[MASK] <TYPE_factual id=C4 antecedents=C3> Consequently, that letter did not give precise assurances that the initial scheme was not in the nature of State aid.</TYPE_factual> <TYPE_factual id=C5 antecedents=C1|C2|C4> Therefore, the General Court did not err in its legal characterisation by holding in paragraph 70 of the judgment under appeal that that letter could not give rise to any legitimate expectation.</TYPE_factual> <TYPE_conclusion id=C12 antecedents=C5|C6|C7|C9>It follows from the foregoing that the third ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": " In that regard, in its 2004 letter, the Commission merely expressed a preliminary opinion on a draft of the promotion scheme which was adopted only the following year, the precise conditions of which were not then fully known.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_factual id=C3> In that regard, in its 2004 letter, the Commission merely expressed a preliminary opinion on a draft of the promotion scheme which was adopted only the following year, the precise conditions of which were not then fully known.</TYPE_factual> <mask> <TYPE_factual id=C5 antecedents=C1|C2|C4> Therefore, the General Court did not err in its legal characterisation by holding in paragraph 70 of the judgment under appeal that that letter could not give rise to any legitimate expectation.</TYPE_factual> <TYPE_conclusion id=C12 antecedents=C5|C6|C7|C9>It follows from the foregoing that the third ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_factual id=C4 antecedents=C3> Consequently, that letter did not give precise assurances that the initial scheme was not in the nature of State aid.</TYPE_factual>"
+      "prefix": "<TYPE_factual id=C3> In that regard, in its 2004 letter, the Commission merely expressed a preliminary opinion on a draft of the promotion scheme which was adopted only the following year, the precise conditions of which were not then fully known.</TYPE_factual> [MASK] <TYPE_factual id=C5 antecedents=C1|C2|C4> Therefore, the General Court did not err in its legal characterisation by holding in paragraph 70 of the judgment under appeal that that letter could not give rise to any legitimate expectation.</TYPE_factual> <TYPE_conclusion id=C12 antecedents=C5|C6|C7|C9>It follows from the foregoing that the third ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": " Consequently, that letter did not give precise assurances that the initial scheme was not in the nature of State aid.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_factual id=C3> In that regard, in its 2004 letter, the Commission merely expressed a preliminary opinion on a draft of the promotion scheme which was adopted only the following year, the precise conditions of which were not then fully known.</TYPE_factual> <TYPE_factual id=C4 antecedents=C3> Consequently, that letter did not give precise assurances that the initial scheme was not in the nature of State aid.</TYPE_factual> <mask> <TYPE_conclusion id=C12 antecedents=C5|C6|C7|C9>It follows from the foregoing that the third ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_factual id=C5 antecedents=C1|C2|C4> Therefore, the General Court did not err in its legal characterisation by holding in paragraph 70 of the judgment under appeal that that letter could not give rise to any legitimate expectation.</TYPE_factual>"
+      "prefix": "<TYPE_factual id=C3> In that regard, in its 2004 letter, the Commission merely expressed a preliminary opinion on a draft of the promotion scheme which was adopted only the following year, the precise conditions of which were not then fully known.</TYPE_factual> <TYPE_factual id=C4 antecedents=C3> Consequently, that letter did not give precise assurances that the initial scheme was not in the nature of State aid.</TYPE_factual> [MASK] <TYPE_conclusion id=C12 antecedents=C5|C6|C7|C9>It follows from the foregoing that the third ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": " Therefore, the General Court did not err in its legal characterisation by holding in paragraph 70 of the judgment under appeal that that letter could not give rise to any legitimate expectation.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_factual id=C3> In that regard, in its 2004 letter, the Commission merely expressed a preliminary opinion on a draft of the promotion scheme which was adopted only the following year, the precise conditions of which were not then fully known.</TYPE_factual> <TYPE_factual id=C4 antecedents=C3> Consequently, that letter did not give precise assurances that the initial scheme was not in the nature of State aid.</TYPE_factual> <TYPE_factual id=C5 antecedents=C1|C2|C4> Therefore, the General Court did not err in its legal characterisation by holding in paragraph 70 of the judgment under appeal that that letter could not give rise to any legitimate expectation.</TYPE_factual> <mask>",
-      "positive": "<TYPE_conclusion id=C12 antecedents=C5|C6|C7|C9>It follows from the foregoing that the third ground of appeal must be rejected.</TYPE_conclusion>"
+      "prefix": "<TYPE_factual id=C3> In that regard, in its 2004 letter, the Commission merely expressed a preliminary opinion on a draft of the promotion scheme which was adopted only the following year, the precise conditions of which were not then fully known.</TYPE_factual> <TYPE_factual id=C4 antecedents=C3> Consequently, that letter did not give precise assurances that the initial scheme was not in the nature of State aid.</TYPE_factual> <TYPE_factual id=C5 antecedents=C1|C2|C4> Therefore, the General Court did not err in its legal characterisation by holding in paragraph 70 of the judgment under appeal that that letter could not give rise to any legitimate expectation.</TYPE_factual> [MASK]",
+      "positive": "It follows from the foregoing that the third ground of appeal must be rejected.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<mask> <TYPE_factual id=C6 antecedents=C7> Nor can the General Court be criticised for not taking the view that such an expectation could result from the alleged ‘2006 decision’.</TYPE_factual> <TYPE_conclusion id=C12 antecedents=C5|C6|C7|C9>It follows from the foregoing that the third ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_factual id=C7> As the General Court pointed out in paragraph 60 of the judgment under appeal, that decision had not been placed on the file, nor even specifically identified by the appellants.</TYPE_factual>"
+      "prefix": "[MASK] <TYPE_factual id=C6 antecedents=C7> Nor can the General Court be criticised for not taking the view that such an expectation could result from the alleged ‘2006 decision’.</TYPE_factual> <TYPE_conclusion id=C12 antecedents=C5|C6|C7|C9>It follows from the foregoing that the third ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": " As the General Court pointed out in paragraph 60 of the judgment under appeal, that decision had not been placed on the file, nor even specifically identified by the appellants.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_factual id=C7> As the General Court pointed out in paragraph 60 of the judgment under appeal, that decision had not been placed on the file, nor even specifically identified by the appellants.</TYPE_factual> <mask> <TYPE_conclusion id=C12 antecedents=C5|C6|C7|C9>It follows from the foregoing that the third ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_factual id=C6 antecedents=C7> Nor can the General Court be criticised for not taking the view that such an expectation could result from the alleged ‘2006 decision’.</TYPE_factual>"
+      "prefix": "<TYPE_factual id=C7> As the General Court pointed out in paragraph 60 of the judgment under appeal, that decision had not been placed on the file, nor even specifically identified by the appellants.</TYPE_factual> [MASK] <TYPE_conclusion id=C12 antecedents=C5|C6|C7|C9>It follows from the foregoing that the third ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": " Nor can the General Court be criticised for not taking the view that such an expectation could result from the alleged ‘2006 decision’.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_factual id=C7> As the General Court pointed out in paragraph 60 of the judgment under appeal, that decision had not been placed on the file, nor even specifically identified by the appellants.</TYPE_factual> <TYPE_factual id=C6 antecedents=C7> Nor can the General Court be criticised for not taking the view that such an expectation could result from the alleged ‘2006 decision’.</TYPE_factual> <mask>",
-      "positive": "<TYPE_conclusion id=C12 antecedents=C5|C6|C7|C9>It follows from the foregoing that the third ground of appeal must be rejected.</TYPE_conclusion>"
+      "prefix": "<TYPE_factual id=C7> As the General Court pointed out in paragraph 60 of the judgment under appeal, that decision had not been placed on the file, nor even specifically identified by the appellants.</TYPE_factual> <TYPE_factual id=C6 antecedents=C7> Nor can the General Court be criticised for not taking the view that such an expectation could result from the alleged ‘2006 decision’.</TYPE_factual> [MASK]",
+      "positive": "It follows from the foregoing that the third ground of appeal must be rejected.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<mask> <TYPE_conclusion id=C12 antecedents=C5|C6|C7|C9>It follows from the foregoing that the third ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_legal_and_factual id=C9> Moreover, the appellants may criticise the General Court for failing to take into account certain other factors, which they claim to have submitted to it, only if that evidence proves that they could rely on a legitimate expectation that the initial scheme for the promotion of electricity production from RES would be maintained.</TYPE_legal_and_factual>"
+      "prefix": "[MASK] <TYPE_conclusion id=C12 antecedents=C5|C6|C7|C9>It follows from the foregoing that the third ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": " Moreover, the appellants may criticise the General Court for failing to take into account certain other factors, which they claim to have submitted to it, only if that evidence proves that they could rely on a legitimate expectation that the initial scheme for the promotion of electricity production from RES would be maintained.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_legal_and_factual id=C9> Moreover, the appellants may criticise the General Court for failing to take into account certain other factors, which they claim to have submitted to it, only if that evidence proves that they could rely on a legitimate expectation that the initial scheme for the promotion of electricity production from RES would be maintained.</TYPE_legal_and_factual> <mask>",
-      "positive": "<TYPE_conclusion id=C12 antecedents=C5|C6|C7|C9>It follows from the foregoing that the third ground of appeal must be rejected.</TYPE_conclusion>"
+      "prefix": "<TYPE_legal_and_factual id=C9> Moreover, the appellants may criticise the General Court for failing to take into account certain other factors, which they claim to have submitted to it, only if that evidence proves that they could rely on a legitimate expectation that the initial scheme for the promotion of electricity production from RES would be maintained.</TYPE_legal_and_factual> [MASK]",
+      "positive": "It follows from the foregoing that the third ground of appeal must be rejected.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<mask> <TYPE_factual id=C10 antecedents=C11> The appellants have not shown that that evidence was sufficient to justify the legitimate expectation alleged.</TYPE_factual>",
-      "positive": "<TYPE_legal_and_factual id=C11 Argument_scheme=Argument from Precedent> In particular, the appellants do not effectively challenge the finding, in paragraph 79 of the judgment under appeal, that exceptional circumstances should not be taken into account in the present case, in so far as that consideration was envisaged, in the judgment of 11 July 1996, SFEI and Others (C‑39/94, EU:C:1996:285), only in order to establish that, in certain cases, the repayment of State aid sought before a national court is inappropriate.</TYPE_legal_and_factual>"
+      "prefix": "[MASK] <TYPE_factual id=C10 antecedents=C11> The appellants have not shown that that evidence was sufficient to justify the legitimate expectation alleged.</TYPE_factual>",
+      "positive": " In particular, the appellants do not effectively challenge the finding, in paragraph 79 of the judgment under appeal, that exceptional circumstances should not be taken into account in the present case, in so far as that consideration was envisaged, in the judgment of 11 July 1996, SFEI and Others (C‑39/94, EU:C:1996:285), only in order to establish that, in certain cases, the repayment of State aid sought before a national court is inappropriate.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_legal_and_factual id=C11 Argument_scheme=Argument from Precedent> In particular, the appellants do not effectively challenge the finding, in paragraph 79 of the judgment under appeal, that exceptional circumstances should not be taken into account in the present case, in so far as that consideration was envisaged, in the judgment of 11 July 1996, SFEI and Others (C‑39/94, EU:C:1996:285), only in order to establish that, in certain cases, the repayment of State aid sought before a national court is inappropriate.</TYPE_legal_and_factual> <mask>",
-      "positive": "<TYPE_factual id=C10 antecedents=C11> The appellants have not shown that that evidence was sufficient to justify the legitimate expectation alleged.</TYPE_factual>"
+      "prefix": "<TYPE_legal_and_factual id=C11 Argument_scheme=Argument from Precedent> In particular, the appellants do not effectively challenge the finding, in paragraph 79 of the judgment under appeal, that exceptional circumstances should not be taken into account in the present case, in so far as that consideration was envisaged, in the judgment of 11 July 1996, SFEI and Others (C‑39/94, EU:C:1996:285), only in order to establish that, in certain cases, the repayment of State aid sought before a national court is inappropriate.</TYPE_legal_and_factual> [MASK]",
+      "positive": " The appellants have not shown that that evidence was sufficient to justify the legitimate expectation alleged.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<mask> <TYPE_factual id=D2 antecedents=D3|D3bis|D4> However, it must be pointed out that that argument is based on a misreading of that judgment.</TYPE_factual> <TYPE_factual id=D4 antecedents=D2>The first part of the fourth ground of appeal must therefore be rejected as unfounded.</TYPE_factual>",
-      "positive": "<TYPE_legal id=D3 Argument_scheme=Argument from Precedent> It is apparent from that judgment that the fact of coming from a compulsory levy is, on the contrary, sufficient to identify State resources (see, to that effect, judgment of 28 March 2019, Germany v Commission, C‑405/16 P, EU:C:2019:268, paragraphs 65 to 72).</TYPE_legal>"
+      "prefix": "[MASK] <TYPE_factual id=D2 antecedents=D3|D3bis|D4> However, it must be pointed out that that argument is based on a misreading of that judgment.</TYPE_factual> <TYPE_factual id=D4 antecedents=D2>The first part of the fourth ground of appeal must therefore be rejected as unfounded.</TYPE_factual>",
+      "positive": " It is apparent from that judgment that the fact of coming from a compulsory levy is, on the contrary, sufficient to identify State resources (see, to that effect, judgment of 28 March 2019, Germany v Commission, C‑405/16 P, EU:C:2019:268, paragraphs 65 to 72).",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_legal id=D3 Argument_scheme=Argument from Precedent> It is apparent from that judgment that the fact of coming from a compulsory levy is, on the contrary, sufficient to identify State resources (see, to that effect, judgment of 28 March 2019, Germany v Commission, C‑405/16 P, EU:C:2019:268, paragraphs 65 to 72).</TYPE_legal> <mask> <TYPE_factual id=D4 antecedents=D2>The first part of the fourth ground of appeal must therefore be rejected as unfounded.</TYPE_factual>",
-      "positive": "<TYPE_factual id=D2 antecedents=D3|D3bis|D4> However, it must be pointed out that that argument is based on a misreading of that judgment.</TYPE_factual>"
+      "prefix": "<TYPE_legal id=D3 Argument_scheme=Argument from Precedent> It is apparent from that judgment that the fact of coming from a compulsory levy is, on the contrary, sufficient to identify State resources (see, to that effect, judgment of 28 March 2019, Germany v Commission, C‑405/16 P, EU:C:2019:268, paragraphs 65 to 72).</TYPE_legal> [MASK] <TYPE_factual id=D4 antecedents=D2>The first part of the fourth ground of appeal must therefore be rejected as unfounded.</TYPE_factual>",
+      "positive": " However, it must be pointed out that that argument is based on a misreading of that judgment.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_legal id=D3 Argument_scheme=Argument from Precedent> It is apparent from that judgment that the fact of coming from a compulsory levy is, on the contrary, sufficient to identify State resources (see, to that effect, judgment of 28 March 2019, Germany v Commission, C‑405/16 P, EU:C:2019:268, paragraphs 65 to 72).</TYPE_legal> <TYPE_factual id=D2 antecedents=D3|D3bis|D4> However, it must be pointed out that that argument is based on a misreading of that judgment.</TYPE_factual> <mask>",
-      "positive": "<TYPE_factual id=D4 antecedents=D2>The first part of the fourth ground of appeal must therefore be rejected as unfounded.</TYPE_factual>"
+      "prefix": "<TYPE_legal id=D3 Argument_scheme=Argument from Precedent> It is apparent from that judgment that the fact of coming from a compulsory levy is, on the contrary, sufficient to identify State resources (see, to that effect, judgment of 28 March 2019, Germany v Commission, C‑405/16 P, EU:C:2019:268, paragraphs 65 to 72).</TYPE_legal> <TYPE_factual id=D2 antecedents=D3|D3bis|D4> However, it must be pointed out that that argument is based on a misreading of that judgment.</TYPE_factual> [MASK]",
+      "positive": "The first part of the fourth ground of appeal must therefore be rejected as unfounded.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<mask> <TYPE_factual id=D2 antecedents=D3|D3bis|D4> However, it must be pointed out that that argument is based on a misreading of that judgment.</TYPE_factual> <TYPE_factual id=D4 antecedents=D2>The first part of the fourth ground of appeal must therefore be rejected as unfounded.</TYPE_factual>",
-      "positive": "<TYPE_legal id=D3bis Argument_scheme=Argument from Precedent|Argument from Interpretation> On the other hand, it is irrelevant that the financing mechanism at issue does not, strictly speaking, fall within the category of fiscal levies under national law (see, to that effect, order of 22 October 2014, Elcogás, C‑275/13, not published, EU:C:2014:2314, paragraph 31).</TYPE_legal>"
+      "prefix": "[MASK] <TYPE_factual id=D2 antecedents=D3|D3bis|D4> However, it must be pointed out that that argument is based on a misreading of that judgment.</TYPE_factual> <TYPE_factual id=D4 antecedents=D2>The first part of the fourth ground of appeal must therefore be rejected as unfounded.</TYPE_factual>",
+      "positive": " On the other hand, it is irrelevant that the financing mechanism at issue does not, strictly speaking, fall within the category of fiscal levies under national law (see, to that effect, order of 22 October 2014, Elcogás, C‑275/13, not published, EU:C:2014:2314, paragraph 31).",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_legal id=D3bis Argument_scheme=Argument from Precedent|Argument from Interpretation> On the other hand, it is irrelevant that the financing mechanism at issue does not, strictly speaking, fall within the category of fiscal levies under national law (see, to that effect, order of 22 October 2014, Elcogás, C‑275/13, not published, EU:C:2014:2314, paragraph 31).</TYPE_legal> <mask> <TYPE_factual id=D4 antecedents=D2>The first part of the fourth ground of appeal must therefore be rejected as unfounded.</TYPE_factual>",
-      "positive": "<TYPE_factual id=D2 antecedents=D3|D3bis|D4> However, it must be pointed out that that argument is based on a misreading of that judgment.</TYPE_factual>"
+      "prefix": "<TYPE_legal id=D3bis Argument_scheme=Argument from Precedent|Argument from Interpretation> On the other hand, it is irrelevant that the financing mechanism at issue does not, strictly speaking, fall within the category of fiscal levies under national law (see, to that effect, order of 22 October 2014, Elcogás, C‑275/13, not published, EU:C:2014:2314, paragraph 31).</TYPE_legal> [MASK] <TYPE_factual id=D4 antecedents=D2>The first part of the fourth ground of appeal must therefore be rejected as unfounded.</TYPE_factual>",
+      "positive": " However, it must be pointed out that that argument is based on a misreading of that judgment.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_legal id=D3bis Argument_scheme=Argument from Precedent|Argument from Interpretation> On the other hand, it is irrelevant that the financing mechanism at issue does not, strictly speaking, fall within the category of fiscal levies under national law (see, to that effect, order of 22 October 2014, Elcogás, C‑275/13, not published, EU:C:2014:2314, paragraph 31).</TYPE_legal> <TYPE_factual id=D2 antecedents=D3|D3bis|D4> However, it must be pointed out that that argument is based on a misreading of that judgment.</TYPE_factual> <mask>",
-      "positive": "<TYPE_factual id=D4 antecedents=D2>The first part of the fourth ground of appeal must therefore be rejected as unfounded.</TYPE_factual>"
+      "prefix": "<TYPE_legal id=D3bis Argument_scheme=Argument from Precedent|Argument from Interpretation> On the other hand, it is irrelevant that the financing mechanism at issue does not, strictly speaking, fall within the category of fiscal levies under national law (see, to that effect, order of 22 October 2014, Elcogás, C‑275/13, not published, EU:C:2014:2314, paragraph 31).</TYPE_legal> <TYPE_factual id=D2 antecedents=D3|D3bis|D4> However, it must be pointed out that that argument is based on a misreading of that judgment.</TYPE_factual> [MASK]",
+      "positive": "The first part of the fourth ground of appeal must therefore be rejected as unfounded.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<mask> <TYPE_factual id=D8 antecedents=D6|D7> Accordingly, this part of that ground of appeal must also be rejected as inadmissible.</TYPE_factual> <TYPE_conclusion id=D12 antecedents=D4|D8|D11> It follows from the foregoing that the fourth ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_factual id=D6> However, even if that finding were incorrect, that error would vitiate the interpretation of national law.</TYPE_factual>"
+      "prefix": "[MASK] <TYPE_factual id=D8 antecedents=D6|D7> Accordingly, this part of that ground of appeal must also be rejected as inadmissible.</TYPE_factual> <TYPE_conclusion id=D12 antecedents=D4|D8|D11> It follows from the foregoing that the fourth ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": " However, even if that finding were incorrect, that error would vitiate the interpretation of national law.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_factual id=D6> However, even if that finding were incorrect, that error would vitiate the interpretation of national law.</TYPE_factual> <mask> <TYPE_conclusion id=D12 antecedents=D4|D8|D11> It follows from the foregoing that the fourth ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_factual id=D8 antecedents=D6|D7> Accordingly, this part of that ground of appeal must also be rejected as inadmissible.</TYPE_factual>"
+      "prefix": "<TYPE_factual id=D6> However, even if that finding were incorrect, that error would vitiate the interpretation of national law.</TYPE_factual> [MASK] <TYPE_conclusion id=D12 antecedents=D4|D8|D11> It follows from the foregoing that the fourth ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": " Accordingly, this part of that ground of appeal must also be rejected as inadmissible.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_factual id=D6> However, even if that finding were incorrect, that error would vitiate the interpretation of national law.</TYPE_factual> <TYPE_factual id=D8 antecedents=D6|D7> Accordingly, this part of that ground of appeal must also be rejected as inadmissible.</TYPE_factual> <mask>",
-      "positive": "<TYPE_conclusion id=D12 antecedents=D4|D8|D11> It follows from the foregoing that the fourth ground of appeal must be rejected.</TYPE_conclusion>"
+      "prefix": "<TYPE_factual id=D6> However, even if that finding were incorrect, that error would vitiate the interpretation of national law.</TYPE_factual> <TYPE_factual id=D8 antecedents=D6|D7> Accordingly, this part of that ground of appeal must also be rejected as inadmissible.</TYPE_factual> [MASK]",
+      "positive": " It follows from the foregoing that the fourth ground of appeal must be rejected.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<mask> <TYPE_factual id=D8 antecedents=D6|D7> Accordingly, this part of that ground of appeal must also be rejected as inadmissible.</TYPE_factual> <TYPE_conclusion id=D12 antecedents=D4|D8|D11> It follows from the foregoing that the fourth ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_legal_and_factual id=D7> The interpretation of national law by the General Court is not open to challenge before the appeal court, except where the facts have been distorted (see, to that effect, judgment of 3 April 2014, France v Commission, C‑559/12 P, EU:C:2014:217, paragraph 79 and the case-law cited), which has not been alleged in the present case by the appellants.</TYPE_legal_and_factual>"
+      "prefix": "[MASK] <TYPE_factual id=D8 antecedents=D6|D7> Accordingly, this part of that ground of appeal must also be rejected as inadmissible.</TYPE_factual> <TYPE_conclusion id=D12 antecedents=D4|D8|D11> It follows from the foregoing that the fourth ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": " The interpretation of national law by the General Court is not open to challenge before the appeal court, except where the facts have been distorted (see, to that effect, judgment of 3 April 2014, France v Commission, C‑559/12 P, EU:C:2014:217, paragraph 79 and the case-law cited), which has not been alleged in the present case by the appellants.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_legal_and_factual id=D7> The interpretation of national law by the General Court is not open to challenge before the appeal court, except where the facts have been distorted (see, to that effect, judgment of 3 April 2014, France v Commission, C‑559/12 P, EU:C:2014:217, paragraph 79 and the case-law cited), which has not been alleged in the present case by the appellants.</TYPE_legal_and_factual> <mask> <TYPE_conclusion id=D12 antecedents=D4|D8|D11> It follows from the foregoing that the fourth ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_factual id=D8 antecedents=D6|D7> Accordingly, this part of that ground of appeal must also be rejected as inadmissible.</TYPE_factual>"
+      "prefix": "<TYPE_legal_and_factual id=D7> The interpretation of national law by the General Court is not open to challenge before the appeal court, except where the facts have been distorted (see, to that effect, judgment of 3 April 2014, France v Commission, C‑559/12 P, EU:C:2014:217, paragraph 79 and the case-law cited), which has not been alleged in the present case by the appellants.</TYPE_legal_and_factual> [MASK] <TYPE_conclusion id=D12 antecedents=D4|D8|D11> It follows from the foregoing that the fourth ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": " Accordingly, this part of that ground of appeal must also be rejected as inadmissible.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_legal_and_factual id=D7> The interpretation of national law by the General Court is not open to challenge before the appeal court, except where the facts have been distorted (see, to that effect, judgment of 3 April 2014, France v Commission, C‑559/12 P, EU:C:2014:217, paragraph 79 and the case-law cited), which has not been alleged in the present case by the appellants.</TYPE_legal_and_factual> <TYPE_factual id=D8 antecedents=D6|D7> Accordingly, this part of that ground of appeal must also be rejected as inadmissible.</TYPE_factual> <mask>",
-      "positive": "<TYPE_conclusion id=D12 antecedents=D4|D8|D11> It follows from the foregoing that the fourth ground of appeal must be rejected.</TYPE_conclusion>"
+      "prefix": "<TYPE_legal_and_factual id=D7> The interpretation of national law by the General Court is not open to challenge before the appeal court, except where the facts have been distorted (see, to that effect, judgment of 3 April 2014, France v Commission, C‑559/12 P, EU:C:2014:217, paragraph 79 and the case-law cited), which has not been alleged in the present case by the appellants.</TYPE_legal_and_factual> <TYPE_factual id=D8 antecedents=D6|D7> Accordingly, this part of that ground of appeal must also be rejected as inadmissible.</TYPE_factual> [MASK]",
+      "positive": " It follows from the foregoing that the fourth ground of appeal must be rejected.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<mask> <TYPE_conclusion id=D12 antecedents=D4|D8|D11> It follows from the foregoing that the fourth ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_factual id=D11> with the result that it must also be rejected as inadmissible.</TYPE_factual>"
+      "prefix": "[MASK] <TYPE_conclusion id=D12 antecedents=D4|D8|D11> It follows from the foregoing that the fourth ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": " with the result that it must also be rejected as inadmissible.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_factual id=D11> with the result that it must also be rejected as inadmissible.</TYPE_factual> <mask>",
-      "positive": "<TYPE_conclusion id=D12 antecedents=D4|D8|D11> It follows from the foregoing that the fourth ground of appeal must be rejected.</TYPE_conclusion>"
+      "prefix": "<TYPE_factual id=D11> with the result that it must also be rejected as inadmissible.</TYPE_factual> [MASK]",
+      "positive": " It follows from the foregoing that the fourth ground of appeal must be rejected.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<mask> <TYPE_conclusion id=E4 antecedents=E2|E3> It follows from the foregoing that the fifth ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_legal_and_factual id=E2 Argument_scheme=Argument from Precedent> However, first, the factual assessment that the Czech Republic voluntarily undertook to implement the ‘review mechanism’ does not, as is apparent from the case-law cited in paragraph 24 above, fall within the jurisdiction of the Court of Justice when hearing an appeal, except where the facts have been distorted, which is not alleged by the appellants.</TYPE_legal_and_factual>"
+      "prefix": "[MASK] <TYPE_conclusion id=E4 antecedents=E2|E3> It follows from the foregoing that the fifth ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": " However, first, the factual assessment that the Czech Republic voluntarily undertook to implement the ‘review mechanism’ does not, as is apparent from the case-law cited in paragraph 24 above, fall within the jurisdiction of the Court of Justice when hearing an appeal, except where the facts have been distorted, which is not alleged by the appellants.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_legal_and_factual id=E2 Argument_scheme=Argument from Precedent> However, first, the factual assessment that the Czech Republic voluntarily undertook to implement the ‘review mechanism’ does not, as is apparent from the case-law cited in paragraph 24 above, fall within the jurisdiction of the Court of Justice when hearing an appeal, except where the facts have been distorted, which is not alleged by the appellants.</TYPE_legal_and_factual> <mask>",
-      "positive": "<TYPE_conclusion id=E4 antecedents=E2|E3> It follows from the foregoing that the fifth ground of appeal must be rejected.</TYPE_conclusion>"
+      "prefix": "<TYPE_legal_and_factual id=E2 Argument_scheme=Argument from Precedent> However, first, the factual assessment that the Czech Republic voluntarily undertook to implement the ‘review mechanism’ does not, as is apparent from the case-law cited in paragraph 24 above, fall within the jurisdiction of the Court of Justice when hearing an appeal, except where the facts have been distorted, which is not alleged by the appellants.</TYPE_legal_and_factual> [MASK]",
+      "positive": " It follows from the foregoing that the fifth ground of appeal must be rejected.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<mask> <TYPE_conclusion id=E4 antecedents=E2|E3> It follows from the foregoing that the fifth ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_legal_and_factual id=E3> Secondly, since the review mechanism must be regarded as having been introduced by the Czech Republic, any failure to comply with the 2008 Guidelines has no bearing on the General Court’s assessment of the legality of the decision at issue adopted by the Commission.</TYPE_legal_and_factual>"
+      "prefix": "[MASK] <TYPE_conclusion id=E4 antecedents=E2|E3> It follows from the foregoing that the fifth ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": " Secondly, since the review mechanism must be regarded as having been introduced by the Czech Republic, any failure to comply with the 2008 Guidelines has no bearing on the General Court’s assessment of the legality of the decision at issue adopted by the Commission.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_legal_and_factual id=E3> Secondly, since the review mechanism must be regarded as having been introduced by the Czech Republic, any failure to comply with the 2008 Guidelines has no bearing on the General Court’s assessment of the legality of the decision at issue adopted by the Commission.</TYPE_legal_and_factual> <mask>",
-      "positive": "<TYPE_conclusion id=E4 antecedents=E2|E3> It follows from the foregoing that the fifth ground of appeal must be rejected.</TYPE_conclusion>"
+      "prefix": "<TYPE_legal_and_factual id=E3> Secondly, since the review mechanism must be regarded as having been introduced by the Czech Republic, any failure to comply with the 2008 Guidelines has no bearing on the General Court’s assessment of the legality of the decision at issue adopted by the Commission.</TYPE_legal_and_factual> [MASK]",
+      "positive": " It follows from the foregoing that the fifth ground of appeal must be rejected.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<mask> <TYPE_conclusion id=G5 antecedents=G2|G3> It follows that the seventh ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_factual id=G2> Thus, the first part of the seventh ground of appeal has no factual basis.</TYPE_factual>"
+      "prefix": "[MASK] <TYPE_conclusion id=G5 antecedents=G2|G3> It follows that the seventh ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": " Thus, the first part of the seventh ground of appeal has no factual basis.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_factual id=G2> Thus, the first part of the seventh ground of appeal has no factual basis.</TYPE_factual> <mask>",
-      "positive": "<TYPE_conclusion id=G5 antecedents=G2|G3> It follows that the seventh ground of appeal must be rejected.</TYPE_conclusion>"
+      "prefix": "<TYPE_factual id=G2> Thus, the first part of the seventh ground of appeal has no factual basis.</TYPE_factual> [MASK]",
+      "positive": " It follows that the seventh ground of appeal must be rejected.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<mask> <TYPE_conclusion id=G5 antecedents=G2|G3> It follows that the seventh ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_factual id=G3> As for the second part of this ground of appeal, it is ineffective, since it is not directed against the judgment under appeal.</TYPE_factual>"
+      "prefix": "[MASK] <TYPE_conclusion id=G5 antecedents=G2|G3> It follows that the seventh ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": " As for the second part of this ground of appeal, it is ineffective, since it is not directed against the judgment under appeal.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_factual id=G3> As for the second part of this ground of appeal, it is ineffective, since it is not directed against the judgment under appeal.</TYPE_factual> <mask>",
-      "positive": "<TYPE_conclusion id=G5 antecedents=G2|G3> It follows that the seventh ground of appeal must be rejected.</TYPE_conclusion>"
+      "prefix": "<TYPE_factual id=G3> As for the second part of this ground of appeal, it is ineffective, since it is not directed against the judgment under appeal.</TYPE_factual> [MASK]",
+      "positive": " It follows that the seventh ground of appeal must be rejected.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<mask> <TYPE_factual id=H5 antecedents=H3|H4|H6> Therefore, the General Court was fully entitled to reject as ineffective the complaints alleging that those assertions were unlawful.</TYPE_factual> <TYPE_conclusion id=H8 antecedents=H5> Accordingly, the eighth ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_factual id=H3> It is common ground that the Commission stated in the decision at issue, first, that the Czech Republic had not infringed the principle of legitimate expectations under national law and, secondly, that any compensation which an arbitration tribunal might grant would, in itself, constitute State aid, would infringe Article 108 TFEU and would therefore not be enforceable.</TYPE_factual>"
+      "prefix": "[MASK] <TYPE_factual id=H5 antecedents=H3|H4|H6> Therefore, the General Court was fully entitled to reject as ineffective the complaints alleging that those assertions were unlawful.</TYPE_factual> <TYPE_conclusion id=H8 antecedents=H5> Accordingly, the eighth ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": " It is common ground that the Commission stated in the decision at issue, first, that the Czech Republic had not infringed the principle of legitimate expectations under national law and, secondly, that any compensation which an arbitration tribunal might grant would, in itself, constitute State aid, would infringe Article 108 TFEU and would therefore not be enforceable.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_factual id=H3> It is common ground that the Commission stated in the decision at issue, first, that the Czech Republic had not infringed the principle of legitimate expectations under national law and, secondly, that any compensation which an arbitration tribunal might grant would, in itself, constitute State aid, would infringe Article 108 TFEU and would therefore not be enforceable.</TYPE_factual> <mask> <TYPE_conclusion id=H8 antecedents=H5> Accordingly, the eighth ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_factual id=H5 antecedents=H3|H4|H6> Therefore, the General Court was fully entitled to reject as ineffective the complaints alleging that those assertions were unlawful.</TYPE_factual>"
+      "prefix": "<TYPE_factual id=H3> It is common ground that the Commission stated in the decision at issue, first, that the Czech Republic had not infringed the principle of legitimate expectations under national law and, secondly, that any compensation which an arbitration tribunal might grant would, in itself, constitute State aid, would infringe Article 108 TFEU and would therefore not be enforceable.</TYPE_factual> [MASK] <TYPE_conclusion id=H8 antecedents=H5> Accordingly, the eighth ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": " Therefore, the General Court was fully entitled to reject as ineffective the complaints alleging that those assertions were unlawful.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_factual id=H3> It is common ground that the Commission stated in the decision at issue, first, that the Czech Republic had not infringed the principle of legitimate expectations under national law and, secondly, that any compensation which an arbitration tribunal might grant would, in itself, constitute State aid, would infringe Article 108 TFEU and would therefore not be enforceable.</TYPE_factual> <TYPE_factual id=H5 antecedents=H3|H4|H6> Therefore, the General Court was fully entitled to reject as ineffective the complaints alleging that those assertions were unlawful.</TYPE_factual> <mask>",
-      "positive": "<TYPE_conclusion id=H8 antecedents=H5> Accordingly, the eighth ground of appeal must be rejected.</TYPE_conclusion>"
+      "prefix": "<TYPE_factual id=H3> It is common ground that the Commission stated in the decision at issue, first, that the Czech Republic had not infringed the principle of legitimate expectations under national law and, secondly, that any compensation which an arbitration tribunal might grant would, in itself, constitute State aid, would infringe Article 108 TFEU and would therefore not be enforceable.</TYPE_factual> <TYPE_factual id=H5 antecedents=H3|H4|H6> Therefore, the General Court was fully entitled to reject as ineffective the complaints alleging that those assertions were unlawful.</TYPE_factual> [MASK]",
+      "positive": " Accordingly, the eighth ground of appeal must be rejected.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<mask> <TYPE_factual id=H5 antecedents=H3|H4|H6> Therefore, the General Court was fully entitled to reject as ineffective the complaints alleging that those assertions were unlawful.</TYPE_factual> <TYPE_conclusion id=H8 antecedents=H5> Accordingly, the eighth ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_legal_and_factual id=H4 Argument_scheme=Argument from Interpretation> However, as the General Court found in paragraphs 158 and 159 of the judgment under appeal, those assertions do not form part of the necessary grounds for the decision at issue.</TYPE_legal_and_factual>"
+      "prefix": "[MASK] <TYPE_factual id=H5 antecedents=H3|H4|H6> Therefore, the General Court was fully entitled to reject as ineffective the complaints alleging that those assertions were unlawful.</TYPE_factual> <TYPE_conclusion id=H8 antecedents=H5> Accordingly, the eighth ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": " However, as the General Court found in paragraphs 158 and 159 of the judgment under appeal, those assertions do not form part of the necessary grounds for the decision at issue.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_legal_and_factual id=H4 Argument_scheme=Argument from Interpretation> However, as the General Court found in paragraphs 158 and 159 of the judgment under appeal, those assertions do not form part of the necessary grounds for the decision at issue.</TYPE_legal_and_factual> <mask> <TYPE_conclusion id=H8 antecedents=H5> Accordingly, the eighth ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_factual id=H5 antecedents=H3|H4|H6> Therefore, the General Court was fully entitled to reject as ineffective the complaints alleging that those assertions were unlawful.</TYPE_factual>"
+      "prefix": "<TYPE_legal_and_factual id=H4 Argument_scheme=Argument from Interpretation> However, as the General Court found in paragraphs 158 and 159 of the judgment under appeal, those assertions do not form part of the necessary grounds for the decision at issue.</TYPE_legal_and_factual> [MASK] <TYPE_conclusion id=H8 antecedents=H5> Accordingly, the eighth ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": " Therefore, the General Court was fully entitled to reject as ineffective the complaints alleging that those assertions were unlawful.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_legal_and_factual id=H4 Argument_scheme=Argument from Interpretation> However, as the General Court found in paragraphs 158 and 159 of the judgment under appeal, those assertions do not form part of the necessary grounds for the decision at issue.</TYPE_legal_and_factual> <TYPE_factual id=H5 antecedents=H3|H4|H6> Therefore, the General Court was fully entitled to reject as ineffective the complaints alleging that those assertions were unlawful.</TYPE_factual> <mask>",
-      "positive": "<TYPE_conclusion id=H8 antecedents=H5> Accordingly, the eighth ground of appeal must be rejected.</TYPE_conclusion>"
+      "prefix": "<TYPE_legal_and_factual id=H4 Argument_scheme=Argument from Interpretation> However, as the General Court found in paragraphs 158 and 159 of the judgment under appeal, those assertions do not form part of the necessary grounds for the decision at issue.</TYPE_legal_and_factual> <TYPE_factual id=H5 antecedents=H3|H4|H6> Therefore, the General Court was fully entitled to reject as ineffective the complaints alleging that those assertions were unlawful.</TYPE_factual> [MASK]",
+      "positive": " Accordingly, the eighth ground of appeal must be rejected.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<mask> <TYPE_factual id=H5 antecedents=H3|H4|H6> Therefore, the General Court was fully entitled to reject as ineffective the complaints alleging that those assertions were unlawful.</TYPE_factual> <TYPE_conclusion id=H8 antecedents=H5> Accordingly, the eighth ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_factual id=H6> Moreover, in paragraph 158 of the judgment under appeal, the General Court expressly accepted that the Commission lacked competence to make a decision on compliance with the principle of the protection of legitimate expectations under national law.</TYPE_factual>"
+      "prefix": "[MASK] <TYPE_factual id=H5 antecedents=H3|H4|H6> Therefore, the General Court was fully entitled to reject as ineffective the complaints alleging that those assertions were unlawful.</TYPE_factual> <TYPE_conclusion id=H8 antecedents=H5> Accordingly, the eighth ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": " Moreover, in paragraph 158 of the judgment under appeal, the General Court expressly accepted that the Commission lacked competence to make a decision on compliance with the principle of the protection of legitimate expectations under national law.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_factual id=H6> Moreover, in paragraph 158 of the judgment under appeal, the General Court expressly accepted that the Commission lacked competence to make a decision on compliance with the principle of the protection of legitimate expectations under national law.</TYPE_factual> <mask> <TYPE_conclusion id=H8 antecedents=H5> Accordingly, the eighth ground of appeal must be rejected.</TYPE_conclusion>",
-      "positive": "<TYPE_factual id=H5 antecedents=H3|H4|H6> Therefore, the General Court was fully entitled to reject as ineffective the complaints alleging that those assertions were unlawful.</TYPE_factual>"
+      "prefix": "<TYPE_factual id=H6> Moreover, in paragraph 158 of the judgment under appeal, the General Court expressly accepted that the Commission lacked competence to make a decision on compliance with the principle of the protection of legitimate expectations under national law.</TYPE_factual> [MASK] <TYPE_conclusion id=H8 antecedents=H5> Accordingly, the eighth ground of appeal must be rejected.</TYPE_conclusion>",
+      "positive": " Therefore, the General Court was fully entitled to reject as ineffective the complaints alleging that those assertions were unlawful.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     },
     {
-      "prefix": "<TYPE_factual id=H6> Moreover, in paragraph 158 of the judgment under appeal, the General Court expressly accepted that the Commission lacked competence to make a decision on compliance with the principle of the protection of legitimate expectations under national law.</TYPE_factual> <TYPE_factual id=H5 antecedents=H3|H4|H6> Therefore, the General Court was fully entitled to reject as ineffective the complaints alleging that those assertions were unlawful.</TYPE_factual> <mask>",
-      "positive": "<TYPE_conclusion id=H8 antecedents=H5> Accordingly, the eighth ground of appeal must be rejected.</TYPE_conclusion>"
+      "prefix": "<TYPE_factual id=H6> Moreover, in paragraph 158 of the judgment under appeal, the General Court expressly accepted that the Commission lacked competence to make a decision on compliance with the principle of the protection of legitimate expectations under national law.</TYPE_factual> <TYPE_factual id=H5 antecedents=H3|H4|H6> Therefore, the General Court was fully entitled to reject as ineffective the complaints alleging that those assertions were unlawful.</TYPE_factual> [MASK]",
+      "positive": " Accordingly, the eighth ground of appeal must be rejected.",
+      "doc_id": "R2021_FVE Holýšov I and Others v Commission"
     }
   ],
   "target_set": [

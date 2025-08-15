@@ -6,6 +6,7 @@
     "reduce_scatter": true,
     "allgather_partitions": true,
     "stage3_param_persistence_threshold": 1000000,
+    "stage3_gather_16bit_weights_on_model_save": true,
     "stage3_max_live_parameters": 3e7
   },
   "bf16": { "enabled": true },

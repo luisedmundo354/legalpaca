@@ -1,6 +1,6 @@
 import argparse
-import os
-from transformers import AutoTokenizer, AutoModelForMaskedLM, TrainingArguments
+import os, json
+from transformers import AutoTokenizer, AutoModelForMaskedLM, TrainingArguments, AutoConfig
 from dataset_json_pairs import JsonPairDataset
 from model_prefix_suffix import PrefixSuffixModel
 from trainer_contrastive import ContrastiveTrainer
@@ -8,7 +8,10 @@ import numpy as np
 import evaluate
 from transformers import EvalPrediction
 from transformers.utils import logging
-logging.set_verbosity_debug()
+import deepspeed
+import torch
+from safetensors.torch import save_model
+from transformers.integrations.deepspeed import unset_hf_deepspeed_config
 
 # Compute custom classification metrics
 accuracy = evaluate.load("accuracy")
@@ -96,11 +99,12 @@ if __name__ == '__main__':
         per_device_eval_batch_size=args.batch_size,
         learning_rate=args.learning_rate,
         eval_strategy="epoch",
-        save_strategy="epoch",
+        save_strategy="no",
         logging_steps=50,
         bf16=True,
         deepspeed=args.deepspeed,
         dataloader_drop_last=True,
+        save_only_model=True,
     )
 
     # Initialize Trainer with contrastive loss
@@ -115,7 +119,59 @@ if __name__ == '__main__':
     # Train and save
     trainer.train()
 
-    # Save encoders and tokenizer
-    model.prefix_enc.save_pretrained(os.path.join(args.model_dir, 'prefix_encoder'))
-    model.suffix_enc.save_pretrained(os.path.join(args.model_dir, 'suffix_encoder'))
-    tok.save_pretrained(args.model_dir)
+    accel = trainer.accelerator
+    out_dir = os.environ.get("SM_MODEL_DIR", training_args.output_dir)
+    os.makedirs(out_dir, exist_ok=True)
+
+    # 1) Consolidate ZeRO-3 shards into a full state_dict (collective across ranks).
+    #    IMPORTANT: pass the DeepSpeed engine (trainer.deepspeed), not the plain nn.Module.
+    state_dict = accel.get_state_dict(trainer.deepspeed)
+    accel.wait_for_everyone()  # sync all ranks after consolidation
+
+    # 2) Rank-0 only: rebuild a clean CPU copy, load weights, and save with model-aware safetensors.
+    if accel.is_main_process:
+        # Prevent Deepspeed’s global zero.Init auto-wrap from affecting any model construction here.
+        unset_hf_deepspeed_config()
+
+        # Recreate your architecture on CPU (no DS hooks active now).
+        m1_cpu = AutoModelForMaskedLM.from_pretrained("answerdotai/ModernBERT-base")
+        m2_cpu = AutoModelForMaskedLM.from_pretrained("answerdotai/ModernBERT-base")
+        cpu_model = PrefixSuffixModel(args, m1_cpu, m2_cpu)
+
+        # Load the consolidated weights into the CPU model.
+        missing, unexpected = cpu_model.load_state_dict(state_dict, strict=False)
+        if unexpected:
+            raise RuntimeError(f"Unexpected keys in state_dict: {unexpected}")
+
+        # Model-aware safetensors write (handles tied/shared tensors correctly).
+        save_model(cpu_model, os.path.join(out_dir, "model.safetensors"))
+
+    # --- Write lightweight config files (since PrefixSuffixModel has no `.config`) ---
+    # Save tokenizer for later use.
+        tok.save_pretrained(out_dir)
+
+    # Save each base encoder’s config (tiny JSONs; no weights).
+        AutoConfig.from_pretrained("answerdotai/ModernBERT-base").save_pretrained(
+            os.path.join(out_dir, "prefix_encoder")
+        )
+        AutoConfig.from_pretrained("answerdotai/ModernBERT-base").save_pretrained(
+            os.path.join(out_dir, "suffix_encoder")
+        )
+
+    # Save a small wrapper metadata file so your inference code knows how to rebuild the module.
+        meta = {
+        "model_type": "prefix_suffix_dual_encoder",   # custom type (informational)
+        "prefix_model_name_or_path": "answerdotai/ModernBERT-base",
+        "suffix_model_name_or_path": "answerdotai/ModernBERT-base",
+        "temperature": getattr(args, "temperature", 0.01),
+        "weight_file": "model.safetensors"
+    }
+        with open(os.path.join(out_dir, "wrapper_config.json"), "w") as f:
+            json.dump(meta, f, indent=2)
+
+# 3) Final barrier so all ranks exit together cleanly.
+    accel.wait_for_everyone()
+# --------------------------------------------------------------------------
+
+
+
