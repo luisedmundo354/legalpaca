@@ -42,7 +42,7 @@ def compute_metrics(eval_pred: EvalPrediction):
 def parse_arguments():
     parser = argparse.ArgumentParser()
 
-    # hyperparameters as CLI flags (alias --num_train_epochs for SageMaker compatibility)
+    # hyperparameters as CLI flags
     parser.add_argument('--epochs', '--num_train_epochs', dest='epochs', type=int,
                         default=10,
                         help='Number of training epochs')
@@ -116,15 +116,13 @@ if __name__ == '__main__':
         compute_metrics=compute_metrics,
     )
 
-    # Train and save
     trainer.train()
 
     accel = trainer.accelerator
     out_dir = os.environ.get("SM_MODEL_DIR", training_args.output_dir)
     os.makedirs(out_dir, exist_ok=True)
 
-    # 1) Consolidate ZeRO-3 shards into a full state_dict (collective across ranks).
-    #    IMPORTANT: pass the DeepSpeed engine (trainer.deepspeed), not the plain nn.Module.
+    # Consolidate ZeRO-3
     state_dict = accel.get_state_dict(trainer.deepspeed)
     accel.wait_for_everyone()  # sync all ranks after consolidation
 
@@ -143,10 +141,9 @@ if __name__ == '__main__':
         if unexpected:
             raise RuntimeError(f"Unexpected keys in state_dict: {unexpected}")
 
-        # Model-aware safetensors write (handles tied/shared tensors correctly).
+        # Model-aware safetensors write
         save_model(cpu_model, os.path.join(out_dir, "model.safetensors"))
 
-    # --- Write lightweight config files (since PrefixSuffixModel has no `.config`) ---
     # Save tokenizer for later use.
         tok.save_pretrained(out_dir)
 
@@ -160,7 +157,7 @@ if __name__ == '__main__':
 
     # Save a small wrapper metadata file so your inference code knows how to rebuild the module.
         meta = {
-        "model_type": "prefix_suffix_dual_encoder",   # custom type (informational)
+        "model_type": "prefix_suffix_dual_encoder",
         "prefix_model_name_or_path": "answerdotai/ModernBERT-base",
         "suffix_model_name_or_path": "answerdotai/ModernBERT-base",
         "temperature": getattr(args, "temperature", 0.01),

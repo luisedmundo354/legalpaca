@@ -29,10 +29,10 @@ def _coerce_to_text(data) -> str:
     """
     # 1) decode only if needed (prevents "'str' has no attribute 'decode'")
     if isinstance(data, (bytes, bytearray)):
-        logger.info(f"[transform_fn] data sample (bytes)={repr(data[:120])}")
+        # logger.info(f"[transform_fn] data sample (bytes)={repr(data[:120])}")
         s = data.decode("utf-8", errors="replace")
     elif isinstance(data, str):
-        logger.info(f"[transform_fn] data sample (str)={repr(str(data)[:120])}")
+        # logger.info(f"[transform_fn] data sample (str)={repr(str(data)[:120])}")
         s = data
     else:
         # very rare path: already-deserialized object
@@ -130,33 +130,48 @@ def transform_fn(model, data, content_type, accept):
     """
     logger.info(f"[transform_fn] content type: {content_type} accept: {accept} data_type={type(data)}")
 
-    text = _coerce_to_text(data)
-    if not text:
-        logger.info(f"[transform_fn] text when it is not text after to_text {text}")
-        body = json.dumps({"error": "Empty or unparsable payload"})
-        # newline-terminated for Batch Transform assemble_with='Line'
-        return body + "\n", "application/json"
+    buf = data if isinstance(data, str) else data.decode("utf-8", "strict")
 
-    logger.info(f"[transform_fn] text when it is text after to_text {text}")
-    embedding = _embed(model, text)
+    outs = []
+    for i, ln in enumerate(buf.splitlines(), 1):
+        if not ln.strip():
+            continue
 
-    if len(embedding) == 1:
-        logger.info(f"embedding[0] returned {type(embedding)}")
-        body = json.dumps({"embedding": embedding[0]})
-    else:
-        logger.info(f"embedding returned {type(embedding)}")
-        body = embedding
+        try:
+            val = json.loads(ln)
+            text = val if isinstance(val, str) else (val.get("inputs") if isinstance(val, dict) else None)
+            if not isinstance(text, str) or not text:
+                raise ValueError("missing/empty 'inputs'")
+        except Exception as e:
+            outs.append(json.dumps(
+                {"error": f"bad input at line {i}: {str(e)}"},
+                separators=(",", ":"),
+                ensure_ascii=False
+            ))
+            continue
 
-    #try:
-    #    json.loads(body)
-    #except Exception as e:
-    #    print(f"[ERR] json.loads failed: {e} head={body[:120]!r}", file=sys.stderr, flush=True)
-    #    raise
+        vec = _embed(model, text)
 
-    # 6) short debug peek (shows if a stray quote snuck in)
-    print(f"[dbg] body_head={body[:80]!r} len={len(body)}", file=sys.stderr, flush=True)
+        outs.append(json.dumps(
+            {"embedding": vec},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False
+        ))
 
-    logger.info(f"Embedding: {embedding[:30]}")
-    logger.info(f"[transform_fn] returning first5={body[:80]!r} len={len(body)}")
+    in_count = sum(1 for ln in buf.splitlines() if ln.strip())
 
-    return body, accept
+    payload = "\n".join(outs) + "\n"
+    # sanity: prove each line is valid JSON before returning
+    for j, line in enumerate(payload.splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            json.loads(line)
+        except Exception as e:
+            logger.error(f"[transform_fn] bad output line {j}: {e} head={line[:80]!r} tail={line[-80:]!r}")
+            raise
+    logger.info(f"[transform_fn] in_count={in_count} out_count={len(outs)} payload_len={len(payload.splitlines())}")
+    return payload
+
+
