@@ -3,7 +3,7 @@ import json, random, argparse, pathlib, os, math, sys
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--input_dir",  required=True,
-                   help="Folder that contains one source‑document JSON file per opinion/ECJ judgement")
+                   help="Folder that contains one source‑document JSON filet")
     p.add_argument("--outdir",     required=True,
                    help="Destination folder that will get train.jsonl / val.jsonl / test.jsonl")
     p.add_argument("--val_frac",   type=float, default=0.10)

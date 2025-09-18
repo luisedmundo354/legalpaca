@@ -19,6 +19,8 @@ except ImportError:
     _USE_SPACY = False
     _nlp = None
 
+from typing import Dict, Iterable, Tuple, List
+
 
 def load_annotations(json_path):
     with open(json_path, 'r', encoding='utf8') as f:
@@ -107,22 +109,89 @@ def markup_span(ann, text):
     close_tag = f'</TYPE_{type_key}>'
     return open_tag + span + close_tag
 
+def erase_spans(
+        text: str,
+        id2ann: Dict[str, dict],
+        *,
+        end_inclusive: bool = True,
+        clamp_to_text: bool = True
+) -> str:
 
-def split_sentences(text):
-    """
-    Segment text into coherent chunks:
-      - Headings (line without ending punctuation, in Title/ALL CAPS) become standalone.
-      - Lists: intro line ending ':' followed by bullets ('a. ...'), each bullet prefixed with intro.
-      - Remaining paragraphs are sentence-segmented via spaCy's sentencizer.
-    """
-    # use spaCy sentencizer if available, else fallback to regex on punctuation+uppercase
+    n = len(text)
+    spans: List[Tuple[int, int]] = []
+
+    # 1) Collect & normalize spans
+    for ann in id2ann.values():
+        s = int(ann["start"])
+        e = int(ann["end"])
+        if end_inclusive:
+            e += 1  # convert [start, end] -> [start, end+1)
+
+        if s > e:
+            s, e = e, s  # tolerate swapped bounds
+
+        if clamp_to_text:
+            s = max(0, min(n, s))
+            e = max(0, min(n, e))
+
+        if s != e:       # skip empty spans
+            spans.append((s, e))
+
+    if not spans:
+        return text
+
+    # 2) Sort and merge overlapping or touching spans
+    spans.sort()  # by start, then end
+    merged: List[Tuple[int, int]] = []
+    cur_s, cur_e = spans[0]
+    for s, e in spans[1:]:
+        if s <= cur_e:          # overlap or directly adjacent (touching)
+            if e > cur_e:
+                cur_e = e
+        else:
+            merged.append((cur_s, cur_e))
+            cur_s, cur_e = s, e
+    merged.append((cur_s, cur_e))
+
+    # 3) Build complement (pieces to keep) and join
+    pieces: List[str] = []
+    prev = 0
+    for s, e in merged:
+        if prev < s:
+            pieces.append(text[prev:s])  # keep gap before this removed span
+        if e > prev:
+            prev = e
+    if prev < n:
+        pieces.append(text[prev:])       # tail after last removed span
+
+    return "".join(pieces)
+
+def split_logic(text):
     nlp = _nlp if _USE_SPACY else None
+
+    # Numeric filter
+    def _is_numeric_only(s: str) -> bool:
+        s = s.strip()
+        if not s:
+            return True
+
+        cleaned = re.sub(r'[\s,._:;/\\\-–—−+±%‰…°”“(){}\[\]<>$€£¥₹·×‘⁄"]', '', s)
+
+        return (not cleaned) or all(ch.isnumeric() for ch in cleaned)
+
+    def emit(s: str, sink: list):
+        s = s.strip()
+        if s and not _is_numeric_only(s):
+            sink.append(s)
 
     lines = text.splitlines()
     chunks = []
     i = 0
     heading_re = re.compile(r'^[A-Z][A-Za-z0-9 ,&\-]+$')
     bullet_re = re.compile(r'^[a-z]\.')
+    # Capture digit bullets
+    # bullet_re = re.compile(r'^(?:[a-z]|\d+)[\.\)]$')
+
     while i < len(lines):
         line = lines[i].strip()
         if not line:
@@ -131,7 +200,7 @@ def split_sentences(text):
 
         # Heading without trailing punctuation
         if heading_re.match(line) and line[-1] not in '.?!:':
-            chunks.append(line)
+            emit(line, chunks)
             i += 1
             continue
 
@@ -141,11 +210,11 @@ def split_sentences(text):
             i += 1
             while i < len(lines) and bullet_re.match(lines[i].strip()):
                 item = lines[i].strip()
-                chunks.append(f"{intro} {item}")
+                emit(f"{intro} {item}", chunks)
                 i += 1
             continue
 
-        # Paragraph -> spaCy sentences
+        # Paragraph -> spaCy sentences (or fallback rule)
         para = [line]
         j = i + 1
         while j < len(lines):
@@ -154,22 +223,29 @@ def split_sentences(text):
                 break
             para.append(nxt)
             j += 1
+
         para_text = ' '.join(para)
         if nlp:
+            # spaCy sentence boundary detection
             for sent in nlp(para_text).sents:
-                s = sent.text.strip()
-                if s:
-                    chunks.append(s)
+                emit(sent.text, chunks)
+            # (spaCy exposes sentences via Doc.sents / sentence segmenter components.) :contentReference[oaicite:1]{index=1}
         else:
             # fallback: split on punctuation followed by uppercase
             pattern = r'(?<=[\.\?\!])\s+(?=[A-Z])'
             for s in re.split(pattern, para_text):
-                s2 = s.strip()
-                if s2:
-                    chunks.append(s2)
+                emit(s, chunks)
         i = j
 
     return chunks
+
+
+def split_sentences(text, id2ann):
+
+    complete_targets = split_logic(text)
+    subtracted_targets = split_logic(erase_spans(text, id2ann))
+
+    return complete_targets, subtracted_targets
 
 
 def build_training_examples(plain, chains, id2ann, doc_id):
@@ -203,12 +279,12 @@ def main():
         plain, anns, doc_id = load_annotations(path)
         chains, id2ann = build_chain_map(anns)
         examples = build_training_examples(plain, chains, id2ann, doc_id)
-        targets = split_sentences(plain)
+        complete_targets, subtracted_targets = split_sentences(plain, id2ann)
 
         fname = os.path.splitext(os.path.basename(path))[0] + '_train.json'
         out_path = os.path.join(out_dir, fname)
         with open(out_path, 'w', encoding='utf8') as f:
-            json.dump({'examples': examples, 'target_set': targets}, f,
+            json.dump({'examples': examples, 'target_set': subtracted_targets, 'target_set_complete': complete_targets}, f,
                       ensure_ascii=False, indent=2)
 
 if __name__ == '__main__':

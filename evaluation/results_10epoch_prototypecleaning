@@ -1,0 +1,156 @@
+Building reference features per document…
+Scanning suffix candidates against doc references…
+
+[near-dup scan] stats: {'docs': 40, 'ref_texts_total': 966, 'candidates_scanned': 1306, 'candidates_removed': 241}
+
+=== Macro metrics (same-document ranking + prefiltered near-dups) ===
+Hit@ 1 = 0.0745
+Hit@ 5 = 0.1905
+Hit@10 = 0.2919
+Hit@20 = 0.4203
+Hit@50 = 0.6439
+MRR     = 0.1485
+Mean rank (found) = 51.06
+Queries with positive in filtered corpus = 483
+
+=== Examples ===
+
+--- Query: R2011_France Télécom SA v European Commission:0
+Document: R2011_France Télécom SA v European Commission  |  same-doc: 556  |  after filter: 342  |  after dedup: 319  |  removed near-dups: 71
+Query: [MASK] <TYPE_legal_and_factual id=A13 Argument_scheme=Argument from Interpretation antecedents=A1|A3|A4|A5|A6|A7|A11> In those circumstances, the General Court was correct to hold, at paragraph 323 of the judgment under appeal, that the finding of the existence of aid depended on a number of ‘circumstances unrelated to’ the special tax regime, such as the fact that the business tax was charged annually and the level of the tax rates voted each year by the authorities in the territory in which FT had establishments.</TYPE_legal_and_factual> <TYPE_prem id=A22 Argument_scheme=Argument from Interpretation antecedents=A13|A14|A15|A16|A18|A19> It follows from those considerations that the General Court did not err in law in finding that the special tax regime conferred an advantage on FT for the purposes of Article 87(1) EC, even though the exact amount of aid granted under that regime had to be determined by reference to certain factors unrelated to the regime. </TYPE_prem> <TYPE_conclusion id=A23 antecedents=A22> The first ground of appeal is therefore unfounded. </TYPE_conclusion>
+Positive: p_R2011_France Télécom SA v European Commission:0  |  rank=178  |  found @1:N, @5:N, @10:N, @20:N, @50:N
+Top-10 retrieved (cosine) within same document:
+ 1. 0.9657  R2011_France Télécom SA v European Commission:103
+    78 Consequently, in recital 53 of the contested decision, the Commission concluded that (i) the business tax regime applicable to FT during the period from 1991
+ 2. 0.9643  R2011_France Télécom SA v European Commission:153
+    8 FT relies on five grounds of appeal, alleging that the General Court: (i) erred in law by classifying the special tax regime as State aid, when the existence 
+ 3. 0.9641  R2011_France Télécom SA v European Commission:158
+    10 FT takes the view that the General Court misconstrued the concept of State aid by finding, at paragraph 323 of the judgment under appeal, that the existence 
+ 4. 0.9633  R2011_France Télécom SA v European Commission:86
+    65 First of all, the Commission states that Law No 90‑568 had established two successive and distinct tax regimes: (i) an exemption regime, applicable from 1991
+ 5. 0.9625  R2011_France Télécom SA v European Commission:91
+    A normal application of the law could, on the contrary, have led to the conclusion that that exemption constituted State aid, the amount of which should have be
+ 6. 0.9615  R2011_France Télécom SA v European Commission:296
+    In so far as FT argues that there was no obligation to notify, because it had not been established that there was an advantage, it should be noted that neither 
+ 7. 0.9613  R2011_France Télécom SA v European Commission:92
+    69 Lastly, the Commission found that the argument that the payments made by FT to the State between 1991 and 1993 should be set off against the under-taxation o
+ 8. 0.9596  R2011_France Télécom SA v European Commission:42
+    19 It follows that the business tax is not based on the profit made by the undertaking’s business, but, at the material time, on a proportion of the value of th
+ 9. 0.9595  R2011_France Télécom SA v European Commission:88
+    67 Consequently, the Commission found that it could not agree that the tax differential from which FT had benefited between 1994 and 2002 had been offset by the
+10. 0.9594  R2011_France Télécom SA v European Commission:262
+    In any event, as the General Court stated at paragraph 215 of the judgment under appeal, the mere fact that the fixed levy and the special tax regime were both 
+Right one [POSITIVE]: p_R2011_France Télécom SA v European Commission:0
+     With regard to the Commission’s claim that the first ground of appeal is inadmissible, it should be noted that that ground, which forms part of the submissions relating to the existence of State aid,
+
+--- Query: R2011_France Télécom SA v European Commission:1
+Document: R2011_France Télécom SA v European Commission  |  same-doc: 556  |  after filter: 342  |  after dedup: 319  |  removed near-dups: 71
+Query: <TYPE_factual id=A1> With regard to the Commission’s claim that the first ground of appeal is inadmissible, it should be noted that that ground, which forms part of the submissions relating to the existence of State aid, was put forward at first instance in the context of the first and second pleas relied on before the General Court.</TYPE_factual> [MASK] <TYPE_prem id=A22 Argument_scheme=Argument from Interpretation antecedents=A13|A14|A15|A16|A18|A19> It follows from those considerations that the General Court did not err in law in finding that the special tax regime conferred an advantage on FT for the purposes of Article 87(1) EC, even though the exact amount of aid granted under that regime had to be determined by reference to certain factors unrelated to the regime. </TYPE_prem> <TYPE_conclusion id=A23 antecedents=A22> The first ground of appeal is therefore unfounded. </TYPE_conclusion>
+Positive: p_R2011_France Télécom SA v European Commission:1  |  rank=215  |  found @1:N, @5:N, @10:N, @20:N, @50:N
+Top-10 retrieved (cosine) within same document:
+ 1. 0.9826  R2011_France Télécom SA v European Commission:92
+    69 Lastly, the Commission found that the argument that the payments made by FT to the State between 1991 and 1993 should be set off against the under-taxation o
+ 2. 0.9821  R2011_France Télécom SA v European Commission:314
+    Accordingly, the General Court could do no other than point out, at paragraph 266 of the judgment under appeal, that the Commission had expressed no opinion at 
+ 3. 0.9815  R2011_France Télécom SA v European Commission:85
+    64 First, the Commission set out the reasons why it considered it appropriate to discount the argument of the French authorities to the effect that the advantag
+ 4. 0.9812  R2011_France Télécom SA v European Commission:262
+    In any event, as the General Court stated at paragraph 215 of the judgment under appeal, the mere fact that the fixed levy and the special tax regime were both 
+ 5. 0.9808  R2011_France Télécom SA v European Commission:233
+    Even if the General Court were entitled in its analysis to take account of the fact that the business tax is payable annually, it should have recognised that, a
+ 6. 0.9804  R2011_France Télécom SA v European Commission:323
+    75 FT states that the French authorities explained, in the course of the administrative procedure, that any under-taxation during the period from 1994 to 2002 c
+ 7. 0.9797  R2011_France Télécom SA v European Commission:93
+    Nor, according to the Commission, does that a posteriori theoretical justification reflect the normal application of French tax law: rather, it is designed sole
+ 8. 0.9796  R2011_France Télécom SA v European Commission:199
+    The second ground of appeal, alleging that the General Court misconstrued the concept of State aid in that the Commission failed to take account of the overall 
+ 9. 0.9795  R2011_France Télécom SA v European Commission:216
+    As regards the purported substitution of grounds on the part of the General Court, it is sufficient to note that the court did not exceed its powers of review i
+10. 0.9795  R2011_France Télécom SA v European Commission:103
+    78 Consequently, in recital 53 of the contested decision, the Commission concluded that (i) the business tax regime applicable to FT during the period from 1991
+Right one [POSITIVE]: p_R2011_France Télécom SA v European Commission:1
+     In those circumstances, the General Court was correct to hold, at paragraph 323 of the judgment under appeal, that the finding of the existence of aid depended on a number of ‘circumstances unrelated
+
+--- Query: R2011_France Télécom SA v European Commission:2
+Document: R2011_France Télécom SA v European Commission  |  same-doc: 556  |  after filter: 342  |  after dedup: 319  |  removed near-dups: 71
+Query: <TYPE_factual id=A1> With regard to the Commission’s claim that the first ground of appeal is inadmissible, it should be noted that that ground, which forms part of the submissions relating to the existence of State aid, was put forward at first instance in the context of the first and second pleas relied on before the General Court.</TYPE_factual> <TYPE_legal_and_factual id=A13 Argument_scheme=Argument from Interpretation antecedents=A1|A3|A4|A5|A6|A7|A11> In those circumstances, the General Court was correct to hold, at paragraph 323 of the judgment under appeal, that the finding of the existence of aid depended on a number of ‘circumstances unrelated to’ the special tax regime, such as the fact that the business tax was charged annually and the level of the tax rates voted each year by the authorities in the territory in which FT had establishments.</TYPE_legal_and_factual> [MASK] <TYPE_conclusion id=A23 antecedents=A22> The first ground of appeal is therefore unfounded. </TYPE_conclusion>
+Positive: p_R2011_France Télécom SA v European Commission:2  |  rank=23  |  found @1:N, @5:N, @10:N, @20:N, @50:Y
+Top-10 retrieved (cosine) within same document:
+ 1. 0.9795  R2011_France Télécom SA v European Commission:103
+    78 Consequently, in recital 53 of the contested decision, the Commission concluded that (i) the business tax regime applicable to FT during the period from 1991
+ 2. 0.9786  R2011_France Télécom SA v European Commission:232
+    The General Court was therefore incorrect in refusing to take account of the fact that the company was over-taxed as a result of the fixed levy during the perio
+ 3. 0.9786  R2011_France Télécom SA v European Commission:216
+    As regards the purported substitution of grounds on the part of the General Court, it is sufficient to note that the court did not exceed its powers of review i
+ 4. 0.9784  R2011_France Télécom SA v European Commission:153
+    8 FT relies on five grounds of appeal, alleging that the General Court: (i) erred in law by classifying the special tax regime as State aid, when the existence 
+ 5. 0.9770  R2011_France Télécom SA v European Commission:43
+    20 … for taxation relating to the years 1994 to 2002, in the case of legal persons liable to corporation tax, the basis for the business tax included (i) the re
+ 6. 0.9764  R2011_France Télécom SA v European Commission:233
+    Even if the General Court were entitled in its analysis to take account of the fact that the business tax is payable annually, it should have recognised that, a
+ 7. 0.9757  R2011_France Télécom SA v European Commission:314
+    Accordingly, the General Court could do no other than point out, at paragraph 266 of the judgment under appeal, that the Commission had expressed no opinion at 
+ 8. 0.9753  R2011_France Télécom SA v European Commission:57
+    30 The tax [payable by way of business tax] – the basis of assessment for which, for the purposes of calculating specific tax bases, followed the general rules 
+ 9. 0.9753  R2011_France Télécom SA v European Commission:158
+    10 FT takes the view that the General Court misconstrued the concept of State aid by finding, at paragraph 323 of the judgment under appeal, that the existence 
+10. 0.9751  R2011_France Télécom SA v European Commission:199
+    The second ground of appeal, alleging that the General Court misconstrued the concept of State aid in that the Commission failed to take account of the overall 
+Right one [POSITIVE]: p_R2011_France Télécom SA v European Commission:2
+     It follows from those considerations that the General Court did not err in law in finding that the special tax regime conferred an advantage on FT for the purposes of Article 87(1) EC, even though th
+
+--- Query: R2011_France Télécom SA v European Commission:3
+Document: R2011_France Télécom SA v European Commission  |  same-doc: 556  |  after filter: 342  |  after dedup: 319  |  removed near-dups: 71
+Query: <TYPE_factual id=A1> With regard to the Commission’s claim that the first ground of appeal is inadmissible, it should be noted that that ground, which forms part of the submissions relating to the existence of State aid, was put forward at first instance in the context of the first and second pleas relied on before the General Court.</TYPE_factual> <TYPE_legal_and_factual id=A13 Argument_scheme=Argument from Interpretation antecedents=A1|A3|A4|A5|A6|A7|A11> In those circumstances, the General Court was correct to hold, at paragraph 323 of the judgment under appeal, that the finding of the existence of aid depended on a number of ‘circumstances unrelated to’ the special tax regime, such as the fact that the business tax was charged annually and the level of the tax rates voted each year by the authorities in the territory in which FT had establishments.</TYPE_legal_and_factual> <TYPE_prem id=A22 Argument_scheme=Argument from Interpretation antecedents=A13|A14|A15|A16|A18|A19> It follows from those considerations that the General Court did not err in law in finding that the special tax regime conferred an advantage on FT for the purposes of Article 87(1) EC, even though the exact amount of aid granted under that regime had to be determined by reference to certain factors unrelated to the regime. </TYPE_prem> [MASK]
+Positive: p_R2011_France Télécom SA v European Commission:3  |  rank=149  |  found @1:N, @5:N, @10:N, @20:N, @50:N
+Top-10 retrieved (cosine) within same document:
+ 1. 0.9819  R2011_France Télécom SA v European Commission:314
+    Accordingly, the General Court could do no other than point out, at paragraph 266 of the judgment under appeal, that the Commission had expressed no opinion at 
+ 2. 0.9812  R2011_France Télécom SA v European Commission:216
+    As regards the purported substitution of grounds on the part of the General Court, it is sufficient to note that the court did not exceed its powers of review i
+ 3. 0.9799  R2011_France Télécom SA v European Commission:85
+    64 First, the Commission set out the reasons why it considered it appropriate to discount the argument of the French authorities to the effect that the advantag
+ 4. 0.9798  R2011_France Télécom SA v European Commission:103
+    78 Consequently, in recital 53 of the contested decision, the Commission concluded that (i) the business tax regime applicable to FT during the period from 1991
+ 5. 0.9797  R2011_France Télécom SA v European Commission:92
+    69 Lastly, the Commission found that the argument that the payments made by FT to the State between 1991 and 1993 should be set off against the under-taxation o
+ 6. 0.9796  R2011_France Télécom SA v European Commission:262
+    In any event, as the General Court stated at paragraph 215 of the judgment under appeal, the mere fact that the fixed levy and the special tax regime were both 
+ 7. 0.9793  R2011_France Télécom SA v European Commission:233
+    Even if the General Court were entitled in its analysis to take account of the fact that the business tax is payable annually, it should have recognised that, a
+ 8. 0.9788  R2011_France Télécom SA v European Commission:203
+    The second part of the second ground of appeal, alleging that the General Court erred in law in its misinterpretation of the contested decision and substituted 
+ 9. 0.9787  R2011_France Télécom SA v European Commission:232
+    The General Court was therefore incorrect in refusing to take account of the fact that the company was over-taxed as a result of the fixed levy during the perio
+10. 0.9786  R2011_France Télécom SA v European Commission:57
+    30 The tax [payable by way of business tax] – the basis of assessment for which, for the purposes of calculating specific tax bases, followed the general rules 
+Right one [POSITIVE]: p_R2011_France Télécom SA v European Commission:3
+     The first ground of appeal is therefore unfounded. 
+
+--- Query: R2011_France Télécom SA v European Commission:4
+Document: R2011_France Télécom SA v European Commission  |  same-doc: 556  |  after filter: 342  |  after dedup: 319  |  removed near-dups: 71
+Query: [MASK] <TYPE_legal id=A3 Argument_scheme=Argument from Precedent antecedents=A2>It includes not only positive benefits but also measures which, in various forms, mitigate the charges which are normally included in the budget of an undertaking and which thus, without being subsidies in the strict sense of the word, are similar in character and have the same effect (see, Joined Cases C‑78/08 to C‑80/08 Paint Graphos and Others [2011] ECR I‑0000, paragraph 45 and the case-law cited).</TYPE_legal> <TYPE_legal_and_factual id=A13 Argument_scheme=Argument from Interpretation antecedents=A1|A3|A4|A5|A6|A7|A11> In those circumstances, the General Court was correct to hold, at paragraph 323 of the judgment under appeal, that the finding of the existence of aid depended on a number of ‘circumstances unrelated to’ the special tax regime, such as the fact that the business tax was charged annually and the level of the tax rates voted each year by the authorities in the territory in which FT had establishments.</TYPE_legal_and_factual> <TYPE_prem id=A22 Argument_scheme=Argument from Interpretation antecedents=A13|A14|A15|A16|A18|A19> It follows from those considerations that the General Court did not err in law in finding that the special tax regime conferred an advantage on FT for the purposes of Article 87(1) EC, even though the exact amount of aid granted under that regime had to be determined by reference to certain factors unrelated to the regime. </TYPE_prem> <TYPE_conclusion id=A23 antecedents=A22> The first ground of appeal is therefore unfounded. </TYPE_conclusion>
+Positive: p_R2011_France Télécom SA v European Commission:4  |  rank=79  |  found @1:N, @5:N, @10:N, @20:N, @50:N
+Top-10 retrieved (cosine) within same document:
+ 1. 0.9698  R2011_France Télécom SA v European Commission:103
+    78 Consequently, in recital 53 of the contested decision, the Commission concluded that (i) the business tax regime applicable to FT during the period from 1991
+ 2. 0.9689  R2011_France Télécom SA v European Commission:92
+    69 Lastly, the Commission found that the argument that the payments made by FT to the State between 1991 and 1993 should be set off against the under-taxation o
+ 3. 0.9683  R2011_France Télécom SA v European Commission:86
+    65 First of all, the Commission states that Law No 90‑568 had established two successive and distinct tax regimes: (i) an exemption regime, applicable from 1991
+ 4. 0.9666  R2011_France Télécom SA v European Commission:347
+    Thus, in the case of a multi-annual scheme, entailing payments or advantages granted on a periodic basis, the date on which an act forming the legal basis of th
+ 5. 0.9663  R2011_France Télécom SA v European Commission:262
+    In any event, as the General Court stated at paragraph 215 of the judgment under appeal, the mere fact that the fixed levy and the special tax regime were both 
+ 6. 0.9662  R2011_France Télécom SA v European Commission:57
+    30 The tax [payable by way of business tax] – the basis of assessment for which, for the purposes of calculating specific tax bases, followed the general rules 
+ 7. 0.9661  R2011_France Télécom SA v European Commission:296
+    In so far as FT argues that there was no obligation to notify, because it had not been established that there was an advantage, it should be noted that neither 
+ 8. 0.9660  R2011_France Télécom SA v European Commission:323
+    75 FT states that the French authorities explained, in the course of the administrative procedure, that any under-taxation during the period from 1994 to 2002 c
+ 9. 0.9659  R2011_France Télécom SA v European Commission:43
+    20 … for taxation relating to the years 1994 to 2002, in the case of legal persons liable to corporation tax, the basis for the business tax included (i) the re
+10. 0.9659  R2011_France Télécom SA v European Commission:153
+    8 FT relies on five grounds of appeal, alleging that the General Court: (i) erred in law by classifying the special tax regime as State aid, when the existence 
+Right one [POSITIVE]: p_R2011_France Télécom SA v European Commission:4
+     As regards whether that ground is well founded, according to settled case-law, the definition of aid is more general than that of a subsidy.
