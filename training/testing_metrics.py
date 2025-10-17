@@ -75,7 +75,7 @@ def save_retrieval_results(
             }
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-    # 2) Convenience: top-k JSONL dumps from your score_collections
+    #  top-k JSONL dumps from your score_collections
     for k, perq in score_collections.items():
         path_k = out_dir / f"topk_{k}.jsonl"
         with open(path_k, "w", encoding="utf-8") as f:
