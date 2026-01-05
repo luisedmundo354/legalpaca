@@ -101,6 +101,16 @@ class MultiPositiveRetrievalTrainDataset(Dataset):
         self.base_seed = int(base_seed)
         self.epoch = 0
 
+        positive_ids_by_doc_id: Dict[str, set[str]] = {}
+        for query in self.queries:
+            positive_ids_by_doc_id.setdefault(query.doc_id, set()).update(query.positive_passage_ids)
+
+        self.positive_passage_ids_by_doc_id = positive_ids_by_doc_id
+        self.base_negative_pool_by_doc_id: Dict[str, List[str]] = {
+            doc_id: [pid for pid in passage_ids if pid not in positive_ids_by_doc_id.get(doc_id, set())]
+            for doc_id, passage_ids in self.candidates_by_case.items()
+        }
+
         self.max_pos_per_query = int(max_pos_per_query)
         self.num_same_case_negatives = int(num_same_case_negatives)
         self.num_distractor_negatives = int(num_distractor_negatives)
@@ -143,35 +153,38 @@ class MultiPositiveRetrievalTrainDataset(Dataset):
             raise ValueError(f"Query has no positives: {query.query_id}")
 
         if self.use_all_same_case_candidates:
-            same_case_candidate_ids = list(self.candidates_by_case.get(query.doc_id, []))
+            doc_candidate_ids = list(self.candidates_by_case.get(query.doc_id, []))
+            excluded_ids = self.positive_passage_ids_by_doc_id.get(query.doc_id, set()) - set(positive_passage_ids)
+            same_case_candidate_ids = [pid for pid in doc_candidate_ids if pid not in excluded_ids]
             if not same_case_candidate_ids:
                 raise ValueError(f"No candidates for case doc_id={query.doc_id}")
 
-            num_pad = self.max_candidates_per_case - len(same_case_candidate_ids)
-            if num_pad < 0:
+            if len(same_case_candidate_ids) > self.max_candidates_per_case:
                 raise ValueError(
                     f"doc_id={query.doc_id} has {len(same_case_candidate_ids)} candidates which exceeds"
                     f" max_candidates_per_case={self.max_candidates_per_case}"
                 )
 
+            num_pad = self.max_candidates_per_case - len(same_case_candidate_ids)
+            if num_pad > 0:
+                same_case_candidate_ids = [
+                    *same_case_candidate_ids,
+                    *self._sample_from_pool(rng, same_case_candidate_ids, num_pad),
+                ]
+
             other_case_pool = [
                 pid
                 for pid in self.distractor_passage_ids
-                if (pid not in set(same_case_candidate_ids)) and (not str(pid).startswith(f"{query.doc_id}::"))
+                if (not str(pid).startswith(f"{query.doc_id}::"))
             ]
-            other_case_needed = self.num_distractor_negatives + num_pad
-            other_case_negs = self._sample_from_pool(rng, other_case_pool, other_case_needed)
+            other_case_negs = self._sample_from_pool(rng, other_case_pool, self.num_distractor_negatives)
 
             candidate_passage_ids: List[str] = [*same_case_candidate_ids, *other_case_negs]
         else:
             num_pos_in_candidates = min(len(positive_passage_ids), self.max_pos_per_query)
             pos_for_candidates = rng.sample(positive_passage_ids, k=num_pos_in_candidates)
 
-            same_case_pool = [
-                pid
-                for pid in self.candidates_by_case.get(query.doc_id, [])
-                if pid not in set(positive_passage_ids)
-            ]
+            same_case_pool = list(self.base_negative_pool_by_doc_id.get(query.doc_id, []))
             same_case_neg_count = self.num_same_case_negatives + (self.max_pos_per_query - num_pos_in_candidates)
             same_case_negs = self._sample_from_pool(rng, same_case_pool, same_case_neg_count)
             distractor_negs = self._sample_from_pool(

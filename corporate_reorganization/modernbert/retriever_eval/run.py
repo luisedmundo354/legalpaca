@@ -162,21 +162,6 @@ def encode_queries(
     return torch.cat(all_vecs, dim=0)
 
 
-def _build_all_cases_candidate_ids(
-    corpus_by_passage_id: Dict[str, Any],
-    *,
-    processed_dir: Path,
-    include_train: bool,
-) -> List[str]:
-    if include_train:
-        return sorted(list(corpus_by_passage_id.keys()))
-
-    val_cases = set((processed_dir / "splits" / "val_cases.txt").read_text(encoding="utf-8").split())
-    test_cases = set((processed_dir / "splits" / "test_cases.txt").read_text(encoding="utf-8").split())
-    allowed = val_cases | test_cases
-    return sorted([pid for pid, passage in corpus_by_passage_id.items() if passage.doc_id in allowed])
-
-
 def _random_ranking(
     candidate_ids: Sequence[str],
     *,
@@ -267,15 +252,16 @@ def run_eval(
     max_k = int(max(ks))
     regimes: List[EvalRegime] = []
 
-    same_case_candidates = [candidates_by_case.get(q.doc_id, []) for q in queries]
-    regimes.append(EvalRegime(name="same_case", candidate_ids_by_query_idx=same_case_candidates))
+    positive_ids_by_doc_id: Dict[str, set[str]] = {}
+    for q in queries:
+        positive_ids_by_doc_id.setdefault(q.doc_id, set()).update(q.positive_passage_ids)
 
-    all_cases_train_val_test = [sorted(list(corpus_by_passage_id.keys())) for _ in queries]
-    regimes.append(EvalRegime(name="all_cases_train_val_test", candidate_ids_by_query_idx=all_cases_train_val_test))
-
-    all_cases_val_test_ids = _build_all_cases_candidate_ids(corpus_by_passage_id, processed_dir=processed_dir, include_train=False)
-    all_cases_val_test = [all_cases_val_test_ids for _ in queries]
-    regimes.append(EvalRegime(name="all_cases_val_test", candidate_ids_by_query_idx=all_cases_val_test))
+    same_doc_filtered: List[List[str]] = []
+    for q in queries:
+        excluded_ids = positive_ids_by_doc_id.get(q.doc_id, set()) - set(q.positive_passage_ids)
+        doc_candidates = candidates_by_case.get(q.doc_id, [])
+        same_doc_filtered.append([pid for pid in doc_candidates if pid not in excluded_ids])
+    regimes.append(EvalRegime(name="same_doc_filtered", candidate_ids_by_query_idx=same_doc_filtered))
 
     results: Dict[str, Any] = {
         "config": {

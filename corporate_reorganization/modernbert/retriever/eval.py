@@ -107,12 +107,9 @@ def evaluate_retrieval(
     query_ids = [q.query_id for q in queries]
     query_texts = [q.query_text for q in queries]
 
-    allowed_other_case_labels = {"Analysis", "Background Facts", "Procedural History", "Conclusion"}
-    other_case_candidate_ids = [
-        pid
-        for pid, passage in corpus_by_passage_id.items()
-        if passage.label in allowed_other_case_labels
-    ]
+    positive_ids_by_doc_id: Dict[str, set[str]] = {}
+    for q in queries:
+        positive_ids_by_doc_id.setdefault(q.doc_id, set()).update(q.positive_passage_ids)
 
     device = next(retriever.parameters()).device
     retriever.eval()
@@ -140,13 +137,11 @@ def evaluate_retrieval(
     candidate_sizes: List[int] = []
     retrieval_losses: List[float] = []
     for qi, query in enumerate(queries):
-        same_case_ids = candidates_by_case.get(query.doc_id, [])
-        candidate_ids = [pid for pid in same_case_ids if pid in passage_index_by_id]
-        candidate_ids.extend(
-            pid
-            for pid in other_case_candidate_ids
-            if (not str(pid).startswith(f"{query.doc_id}::")) and (pid in passage_index_by_id)
-        )
+        doc_candidate_ids = candidates_by_case.get(query.doc_id, [])
+        excluded_ids = positive_ids_by_doc_id.get(query.doc_id, set()) - set(query.positive_passage_ids)
+        candidate_ids = [
+            pid for pid in doc_candidate_ids if (pid in passage_index_by_id) and (pid not in excluded_ids)
+        ]
         candidate_indices = [passage_index_by_id[pid] for pid in candidate_ids]
         if not candidate_indices:
             continue

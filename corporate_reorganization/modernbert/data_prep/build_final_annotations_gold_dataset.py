@@ -12,11 +12,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
+try:
+    from .sentence_splitter import SentenceSpan, split_sentences_with_offsets
+except ImportError:  # pragma: no cover
+    from sentence_splitter import SentenceSpan, split_sentences_with_offsets
+
 LABEL_RULE = "Rule"
 LABEL_ANALYSIS = "Analysis"
 LABEL_CONCLUSION = "Conclusion"
 LABEL_BACKGROUND = "Background Facts"
 LABEL_PROCEDURE = "Procedural History"
+LABEL_UNLABELED = "Unlabeled"
 
 LABEL_TOKEN_BY_LABEL: Dict[str, str] = {
     LABEL_RULE: "[RULE]",
@@ -48,6 +54,7 @@ class SpanNode:
 class CaseGraph:
     doc_id: str
     source_file: str
+    case_text: str
     nodes_by_id: Dict[str, SpanNode]
     premise_ids_by_conclusion_id: Dict[str, List[str]]
     conclusion_ids_by_premise_id: Dict[str, List[str]]
@@ -104,6 +111,7 @@ def _parse_case_graph(label_studio_path: Path) -> CaseGraph:
     export = _safe_read_json(label_studio_path)
 
     doc_id = _canonical_doc_id(export.get("id"), label_studio_path)
+    case_text = str(((export.get("task") or {}).get("data") or {}).get("case_content") or "")
     result_items = export.get("result") or []
 
     nodes_by_id: Dict[str, SpanNode] = {}
@@ -166,6 +174,7 @@ def _parse_case_graph(label_studio_path: Path) -> CaseGraph:
     return CaseGraph(
         doc_id=doc_id,
         source_file=label_studio_path.name,
+        case_text=case_text,
         nodes_by_id=nodes_by_id,
         premise_ids_by_conclusion_id=premise_ids_by_conclusion_id,
         conclusion_ids_by_premise_id=conclusion_ids_by_premise_id,
@@ -400,20 +409,11 @@ def _dedupe_preserve_order(items: Sequence[str]) -> List[str]:
 def _build_queries_for_case(
     *,
     case_graph: CaseGraph,
+    sentence_passage_ids_by_node_id: Dict[str, List[str]],
     include_background_procedure_candidates: bool,
 ) -> List[Dict[str, Any]]:
     queries: List[Dict[str, Any]] = []
     query_ids_seen: Set[str] = set()
-
-    candidate_labels: Set[str] = {LABEL_RULE, LABEL_ANALYSIS, LABEL_CONCLUSION}
-    if include_background_procedure_candidates:
-        candidate_labels |= {LABEL_BACKGROUND, LABEL_PROCEDURE}
-
-    corpus_node_ids = {
-        node_id
-        for node_id, node in case_graph.nodes_by_id.items()
-        if (node.label in candidate_labels) and (not node.is_implicit)
-    }
 
     for motion_root_id in case_graph.root_conclusion_ids:
         motion_node_ids = _collect_motion_node_ids(
@@ -436,7 +436,7 @@ def _build_queries_for_case(
                     for node in block_nodes
                     if (not node.is_implicit)
                     and (node.label in ALLOWED_POSITIVE_LABELS)
-                    and (node.node_id in corpus_node_ids)
+                    and bool(sentence_passage_ids_by_node_id.get(node.node_id))
                 ]
                 if not maskable_nodes:
                     continue
@@ -444,9 +444,11 @@ def _build_queries_for_case(
                 missing_node_ids = {node.node_id for node in maskable_nodes}
                 excluded_node_ids = set(missing_node_ids)
 
-                positive_passage_ids = [
-                    f"{case_graph.doc_id}::{node.node_id}" for node in maskable_nodes
-                ]
+                positive_sentence_ids: List[str] = []
+                for node in maskable_nodes:
+                    positive_sentence_ids.extend(sentence_passage_ids_by_node_id.get(node.node_id, []))
+
+                positive_passage_ids = positive_sentence_ids
                 positive_passage_ids = _dedupe_preserve_order(positive_passage_ids)
                 if not positive_passage_ids:
                     continue
@@ -492,7 +494,11 @@ def _build_queries_for_case(
         if root_node.is_implicit or not root_premise_nodes_in_order:
             continue
 
-        positive_passage_ids = [f"{case_graph.doc_id}::{motion_root_id}"]
+        positive_passage_ids = _dedupe_preserve_order(
+            sentence_passage_ids_by_node_id.get(motion_root_id, [])
+        )
+        if not positive_passage_ids:
+            continue
         excluded_node_ids = {motion_root_id}
         missing_node_ids = {motion_root_id}
 
@@ -527,46 +533,88 @@ def _build_queries_for_case(
     return queries
 
 
+def _overlap_len(*, start_a: int, end_a: int, start_b: int, end_b: int) -> int:
+    start = max(int(start_a), int(start_b))
+    end = min(int(end_a), int(end_b))
+    return max(0, end - start)
+
+
+def _sentence_spans_for_case(case_graph: CaseGraph) -> List[SentenceSpan]:
+    return split_sentences_with_offsets(case_graph.case_text)
+
+
+def _build_sentence_corpus_records_for_case(
+    case_graph: CaseGraph,
+) -> Tuple[List[Dict[str, Any]], Dict[str, List[str]]]:
+    nodes_with_positions = [
+        node for node in case_graph.nodes_by_id.values() if (not node.is_implicit) and node.text
+    ]
+    nodes_with_positions.sort(key=_node_sort_key)
+
+    sentence_spans = _sentence_spans_for_case(case_graph)
+    sentence_passage_ids_by_node_id: Dict[str, List[str]] = {node.node_id: [] for node in nodes_with_positions}
+
+    records: List[Dict[str, Any]] = []
+    for sentence_idx, sent in enumerate(sentence_spans):
+        passage_id = f"{case_graph.doc_id}::SENT_{sentence_idx:05d}"
+        best_key: Optional[Tuple[int, int, int, str]] = None
+        best_node_id: Optional[str] = None
+
+        for node in nodes_with_positions:
+            if node.start is None or node.end is None:
+                continue
+            overlap = _overlap_len(start_a=sent.start, end_a=sent.end, start_b=node.start, end_b=node.end)
+            if overlap <= 0:
+                continue
+            sentence_passage_ids_by_node_id.setdefault(node.node_id, []).append(passage_id)
+
+            start_key = int(node.start) if node.start is not None else 10**18
+            end_key = int(node.end) if node.end is not None else 10**18
+            candidate_key = (-int(overlap), start_key, end_key, str(node.node_id))
+            if best_key is None or candidate_key < best_key:
+                best_key = candidate_key
+                best_node_id = node.node_id
+
+        label = (
+            case_graph.nodes_by_id[best_node_id].label if best_node_id is not None else LABEL_UNLABELED
+        )
+        records.append(
+            {
+                "passage_id": passage_id,
+                "doc_id": case_graph.doc_id,
+                "label": label,
+                "text": sent.text,
+                "start": int(sent.start),
+                "end": int(sent.end),
+                "source_node_id": best_node_id,
+                "is_implicit": False,
+                "order": int(sentence_idx),
+            }
+        )
+
+    return records, sentence_passage_ids_by_node_id
+
+
 def _build_corpus_records(
     *,
     case_graphs: Sequence[CaseGraph],
     include_background_procedure_candidates: bool,
-) -> List[Dict[str, Any]]:
-    candidate_labels: Set[str] = {LABEL_RULE, LABEL_ANALYSIS, LABEL_CONCLUSION}
-    if include_background_procedure_candidates:
-        candidate_labels |= {LABEL_BACKGROUND, LABEL_PROCEDURE}
-
+) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, List[str]]]]:
     records: List[Dict[str, Any]] = []
+    sentence_passage_ids_by_node_id_by_doc_id: Dict[str, Dict[str, List[str]]] = {}
+
     for case_graph in case_graphs:
-        nodes_in_order = sorted(
-            [
-                node
-                for node in case_graph.nodes_by_id.values()
-                if (node.label in candidate_labels) and (not node.is_implicit)
-            ],
-            key=_node_sort_key,
-        )
-        for node in nodes_in_order:
-            label_token = LABEL_TOKEN_BY_LABEL.get(node.label, "[UNKNOWN]")
-            passage_text = f"{label_token} {node.text}".strip()
-            records.append(
-                {
-                    "passage_id": f"{case_graph.doc_id}::{node.node_id}",
-                    "doc_id": case_graph.doc_id,
-                    "label": node.label,
-                    "text": passage_text,
-                    "start": node.start,
-                    "end": node.end,
-                    "is_implicit": False,
-                    "order": case_graph.order_by_node_id.get(node.node_id),
-                }
-            )
+        case_records, sentence_ids_by_node_id = _build_sentence_corpus_records_for_case(case_graph)
+        records.extend(case_records)
+        sentence_passage_ids_by_node_id_by_doc_id[case_graph.doc_id] = sentence_ids_by_node_id
 
     def _corpus_order_key(rec: Dict[str, Any]) -> Tuple[str, int, str]:
-        return (str(rec["doc_id"]), int(rec.get("order") or 10**18), str(rec["passage_id"]))
+        order_raw = rec.get("order")
+        order_key = int(order_raw) if order_raw is not None else 10**18
+        return (str(rec["doc_id"]), order_key, str(rec["passage_id"]))
 
     records.sort(key=_corpus_order_key)
-    return records
+    return records, sentence_passage_ids_by_node_id_by_doc_id
 
 
 def _build_case_records(case_graphs: Sequence[CaseGraph]) -> List[Dict[str, Any]]:
@@ -576,10 +624,12 @@ def _build_case_records(case_graphs: Sequence[CaseGraph]) -> List[Dict[str, Any]
         for node in case_graph.nodes_by_id.values():
             label_counts[node.label] = label_counts.get(node.label, 0) + 1
 
+        num_sentences = len(_sentence_spans_for_case(case_graph))
         records.append(
             {
                 "doc_id": case_graph.doc_id,
                 "source_file": case_graph.source_file,
+                "num_sentences": int(num_sentences),
                 "num_nodes": len(case_graph.nodes_by_id),
                 "num_relations": sum(
                     len(v) for v in case_graph.premise_ids_by_conclusion_id.values()
@@ -663,7 +713,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         raise SystemExit(f"No *.json files found under {args.raw_dir}")
 
     case_graphs = [_parse_case_graph(p) for p in raw_paths]
-    corpus_records = _build_corpus_records(
+    corpus_records, sentence_passage_ids_by_node_id_by_doc_id = _build_corpus_records(
         case_graphs=case_graphs,
         include_background_procedure_candidates=include_background_procedure_candidates,
     )
@@ -706,9 +756,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             case_graph = case_graph_by_doc_id.get(doc_id)
             if case_graph is None:
                 continue
+            sentence_ids_by_node_id = sentence_passage_ids_by_node_id_by_doc_id.get(doc_id, {})
             queries_by_split[split_name].extend(
                 _build_queries_for_case(
                     case_graph=case_graph,
+                    sentence_passage_ids_by_node_id=sentence_ids_by_node_id,
                     include_background_procedure_candidates=include_background_procedure_candidates,
                 )
             )
