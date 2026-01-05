@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 from typing import List, Tuple
@@ -87,22 +88,39 @@ def parse_args() -> Tuple[argparse.Namespace, List[str]]:
     parser.add_argument("--max_len_passage", type=int, default=600)
 
     parser.add_argument("--max_pos_per_query", type=int, default=2)
-    parser.add_argument("--num_same_case_negatives", type=int, default=4)
-    parser.add_argument("--num_distractor_negatives", type=int, default=4)
+    parser.add_argument(
+        "--num_same_case_negatives",
+        type=int,
+        default=-1,
+        help="When < 0, include all same-case candidates (padded to max case size).",
+    )
+    parser.add_argument("--num_distractor_negatives", type=int, default=32)
     parser.add_argument(
         "--distractor_labels",
         type=str,
-        default="Background Facts,Procedural History",
-        help="Comma-separated corpus labels to sample as safe distractors.",
+        default="Analysis,Background Facts,Procedural History,Conclusion",
+        help="Comma-separated corpus labels to sample as cross-case negatives.",
     )
     parser.add_argument("--base_seed", type=int, default=17)
 
     parser.add_argument("--eval_query_batch_size", type=int, default=64)
     parser.add_argument("--eval_passage_batch_size", type=int, default=256)
-    parser.add_argument("--eval_ks", type=str, default="1,5,10,20,50")
+    parser.add_argument("--eval_ks", type=str, default="1,5,10,20")
 
     parser.add_argument("--logging_steps", type=int, default=50)
     parser.add_argument("--deepspeed", type=str, default=None)
+    parser.add_argument(
+        "--effective_batch_size_queries",
+        type=int,
+        default=64,
+        help="Target global (all GPUs) queries per optimizer step when using gradient accumulation.",
+    )
+    parser.add_argument(
+        "--gradient_accumulation_steps",
+        type=int,
+        default=0,
+        help="When > 0, overrides the auto-computed gradient accumulation steps.",
+    )
 
     return parser.parse_known_args()
 
@@ -133,6 +151,22 @@ def main() -> None:
     processed_dir = Path(args.processed_dir)
     model_dir = Path(args.model_dir)
     model_dir.mkdir(parents=True, exist_ok=True)
+
+    micro_batch_queries_per_gpu = int(args.batch_size_queries)
+    requested_grad_accum = int(args.gradient_accumulation_steps)
+    if requested_grad_accum > 0:
+        grad_accum_steps = requested_grad_accum
+    else:
+        target_global_queries = int(args.effective_batch_size_queries)
+        global_micro_batch = max(1, micro_batch_queries_per_gpu * max(1, world_size))
+        grad_accum_steps = max(1, int(math.ceil(float(target_global_queries) / float(global_micro_batch))))
+    effective_global_queries = micro_batch_queries_per_gpu * max(1, world_size) * grad_accum_steps
+    print(
+        "SM_DIAG"
+        f" micro_batch_queries_per_gpu={micro_batch_queries_per_gpu}"
+        f" gradient_accumulation_steps={grad_accum_steps}"
+        f" effective_global_queries={effective_global_queries}"
+    )
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, use_fast=True)
     tokenizer.add_special_tokens({"additional_special_tokens": all_markup_tokens()})
@@ -190,6 +224,7 @@ def main() -> None:
         learning_rate=float(args.learning_rate),
         warmup_ratio=float(args.warmup_ratio),
         weight_decay=float(args.weight_decay),
+        gradient_accumulation_steps=int(grad_accum_steps),
         evaluation_strategy="epoch",
         save_strategy="no",
         logging_steps=int(args.logging_steps),

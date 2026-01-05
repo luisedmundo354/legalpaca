@@ -12,6 +12,7 @@ from typing import Optional, Tuple
 class ModelArtifactRef:
     source: str
     local_dir: Path
+    cleanup_dir: Optional[Path] = None
 
 
 def parse_s3_uri(s3_uri: str) -> Tuple[str, str]:
@@ -25,18 +26,41 @@ def parse_s3_uri(s3_uri: str) -> Tuple[str, str]:
 
 
 def _download_s3_to_path(s3_uri: str, dst_path: Path) -> None:
-    import boto3
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        import boto3
+    except ImportError:
+        aws_cli = shutil.which("aws")
+        if aws_cli is None:
+            raise RuntimeError(
+                "Cannot download from S3 because boto3 is not installed and the `aws` CLI was not found. "
+                "Either install boto3, or download the artifact manually and pass --model_dir."
+            )
+        import subprocess
+
+        subprocess.check_call([aws_cli, "s3", "cp", s3_uri, str(dst_path)])
+        return
 
     bucket, key = parse_s3_uri(s3_uri)
     client = boto3.client("s3")
-    dst_path.parent.mkdir(parents=True, exist_ok=True)
     client.download_file(bucket, key, str(dst_path))
+
+
+def _safe_extractall(tar: tarfile.TarFile, dst_dir: Path) -> None:
+    dst_dir = dst_dir.resolve()
+    for member in tar.getmembers():
+        member_path = (dst_dir / member.name).resolve()
+        try:
+            member_path.relative_to(dst_dir)
+        except ValueError:
+            raise RuntimeError(f"Unsafe path in tar member: {member.name}")
+    tar.extractall(path=dst_dir)
 
 
 def extract_model_tar_gz(model_tar_gz: Path, dst_dir: Path) -> Path:
     dst_dir.mkdir(parents=True, exist_ok=True)
     with tarfile.open(model_tar_gz, "r:gz") as tar:
-        tar.extractall(path=dst_dir)
+        _safe_extractall(tar, dst_dir)
 
     model_safetensors = dst_dir / "model.safetensors"
     if model_safetensors.exists():
@@ -56,14 +80,16 @@ def resolve_model_artifact(
 ) -> ModelArtifactRef:
     if model_dir:
         local_dir = Path(model_dir).expanduser().resolve()
-        return ModelArtifactRef(source=f"dir:{local_dir}", local_dir=local_dir)
+        return ModelArtifactRef(source=f"dir:{local_dir}", local_dir=local_dir, cleanup_dir=None)
 
     if not model_s3_uri:
         raise ValueError("Provide --model_dir or --model_s3_uri")
 
     base_work_dir = Path(work_dir).expanduser().resolve() if work_dir else None
+    cleanup_dir: Optional[Path] = None
     if base_work_dir is None:
         base_work_dir = Path(tempfile.mkdtemp(prefix="cr_model_"))
+        cleanup_dir = base_work_dir
     else:
         base_work_dir.mkdir(parents=True, exist_ok=True)
 
@@ -72,18 +98,10 @@ def resolve_model_artifact(
 
     extracted_root = base_work_dir / "extracted"
     model_root = extract_model_tar_gz(model_tar_path, extracted_root)
-    return ModelArtifactRef(source=model_s3_uri, local_dir=model_root)
+    return ModelArtifactRef(source=model_s3_uri, local_dir=model_root, cleanup_dir=cleanup_dir)
 
 
 def cleanup_model_artifact(model_artifact: ModelArtifactRef) -> None:
-    if model_artifact.source.startswith("dir:"):
+    if model_artifact.cleanup_dir is None:
         return
-    local_dir = model_artifact.local_dir
-    tmp_root = local_dir
-    for _ in range(5):
-        if tmp_root.parent == tmp_root:
-            break
-        tmp_root = tmp_root.parent
-    if tmp_root.name.startswith("cr_model_"):
-        shutil.rmtree(tmp_root, ignore_errors=True)
-
+    shutil.rmtree(model_artifact.cleanup_dir, ignore_errors=True)

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
 import torch
 from safetensors.torch import load_file
@@ -38,18 +39,34 @@ def _truncate_text(text: str, max_chars: int) -> str:
     return text[: max_chars - 3] + "..."
 
 
+def _sha256_file(path: Path) -> str:
+    sha = hashlib.sha256()
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(1024 * 1024)
+            if not chunk:
+                break
+            sha.update(chunk)
+    return sha.hexdigest()
+
+
 def load_retriever_from_artifact(model_dir: Path, *, device: torch.device) -> Tuple[DualEncoderRetriever, Any]:
     wrapper_config_path = model_dir / "wrapper_config.json"
     wrapper = json.loads(wrapper_config_path.read_text(encoding="utf-8")) if wrapper_config_path.exists() else {}
     temperature = float(wrapper.get("temperature", 0.05))
 
-    tokenizer = AutoTokenizer.from_pretrained(str(model_dir), use_fast=True)
+    tokenizer = _load_tokenizer_with_compat(model_dir)
     slot_token_id = int(tokenizer.convert_tokens_to_ids(SLOT_TOKEN))
     if slot_token_id == tokenizer.unk_token_id:
         raise ValueError(f"{SLOT_TOKEN} is not present in the model tokenizer")
 
     encoder_config_dir = model_dir / "encoder_config"
-    config = AutoConfig.from_pretrained(str(encoder_config_dir))
+    try:
+        config = AutoConfig.from_pretrained(str(encoder_config_dir))
+    except KeyError as e:
+        raise RuntimeError(
+            "Failed to load ModernBERT config; install transformers==4.49.0 (or newer) to run evaluation."
+        ) from e
     encoder = AutoModel.from_config(config)
     encoder.resize_token_embeddings(len(tokenizer))
 
@@ -59,6 +76,38 @@ def load_retriever_from_artifact(model_dir: Path, *, device: torch.device) -> Tu
     retriever.to(device)
     retriever.eval()
     return retriever, tokenizer
+
+
+def _load_tokenizer_with_compat(model_dir: Path):
+    try:
+        return AutoTokenizer.from_pretrained(str(model_dir), use_fast=True)
+    except Exception:
+        patched = _patch_tokenizer_json_for_legacy_tokenizers(model_dir)
+        if not patched:
+            raise
+        return AutoTokenizer.from_pretrained(str(model_dir), use_fast=True)
+
+
+def _patch_tokenizer_json_for_legacy_tokenizers(model_dir: Path) -> bool:
+    tokenizer_json_path = model_dir / "tokenizer.json"
+    if not tokenizer_json_path.exists():
+        return False
+
+    try:
+        data = json.loads(tokenizer_json_path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+
+    merges = (data.get("model") or {}).get("merges")
+    if not merges or not isinstance(merges, list) or not isinstance(merges[0], list):
+        return False
+
+    data["model"]["merges"] = [" ".join(pair) for pair in merges]
+    backup_path = model_dir / "tokenizer.json.orig"
+    if not backup_path.exists():
+        backup_path.write_bytes(tokenizer_json_path.read_bytes())
+    tokenizer_json_path.write_text(json.dumps(data), encoding="utf-8")
+    return True
 
 
 def encode_passages(
@@ -235,6 +284,11 @@ def run_eval(
             "model_dir": str(model_artifact.local_dir),
             "processed_dir": str(processed_dir),
             "split": split,
+            "data_sha256": {
+                "corpus.jsonl": _sha256_file(processed_dir / "corpus.jsonl"),
+                f"queries/{split}.jsonl": _sha256_file(processed_dir / "queries" / f"{split}.jsonl"),
+                "pools/candidates_by_case.json": _sha256_file(processed_dir / "pools" / "candidates_by_case.json"),
+            },
             "max_len_query": int(max_len_query),
             "max_len_passage": int(max_len_passage),
             "query_batch_size": int(query_batch_size),
@@ -254,7 +308,7 @@ def run_eval(
             model_per_query_rows: List[Dict[str, float]] = []
             baseline_per_query_rows: List[Dict[str, float]] = []
 
-            for qi, (query, query_info) in enumerate(zip(queries, query_infos)):
+            for qi, query_info in enumerate(query_infos):
                 candidate_ids = [pid for pid in candidate_ids_by_query[qi] if pid in passage_idx_by_id]
                 retrieved_ids: List[str] = []
                 top_scores_list: List[float] = []

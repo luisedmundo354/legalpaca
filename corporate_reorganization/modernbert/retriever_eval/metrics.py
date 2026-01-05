@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Sequence, Set, Tuple
+from typing import Dict, List, Sequence, Set
 
 
 @dataclass(frozen=True)
@@ -130,4 +130,3 @@ def compute_bucketed_metrics(
             agg["num_queries"] = float(len(rows))
             out[group_name][bucket_name] = agg
     return out
-

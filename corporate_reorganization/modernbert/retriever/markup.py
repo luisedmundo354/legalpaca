@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import List
 
-SLOT_TOKEN = "[SLOT]"
+SLOT_TOKEN = "[MASK]"
 MISSING_TOKEN = "[MISSING]"
 IMPLICIT_TOKEN = "[IMPLICIT]"
 
@@ -31,4 +31,3 @@ STRUCTURE_TOKENS: List[str] = [
 
 def all_markup_tokens() -> List[str]:
     return [SLOT_TOKEN, MISSING_TOKEN, IMPLICIT_TOKEN, *LABEL_TOKENS, *STRUCTURE_TOKENS]
-

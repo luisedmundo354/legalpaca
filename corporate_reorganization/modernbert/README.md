@@ -19,10 +19,10 @@ Entry point:
 Key behavior:
 
 - **Multi-positive** contrastive loss (a query can have 1+ positives).
-- Query embedding = hidden state at the `[SLOT]` token.
+- Query embedding = hidden state at the `[MASK]` token.
 - Passage embedding = mean pooling over non-padding tokens (excluding position 0).
-- Negatives = same-case candidates + optional safe distractors (Background/Procedure).
-- Validation logs both **contrastive loss** (`eval_loss`) and **retrieval metrics** (e.g. `eval_set_recall_at_20`).
+- Negatives = all same-case candidates (padded to max case size) + cross-case negatives (default 32, label-filtered).
+- Validation logs both **contrastive loss** (`eval_loss`) and **retrieval metrics** (e.g. `eval_recall_at_20`).
 
 SageMaker notebook template:
 
@@ -48,4 +48,20 @@ Outputs:
 
 - `results.json` (global + breakdown metrics, includes random baseline)
 - `config.json`
+- `report.md` (quick summary table: model vs random)
 - `runs/topk_examples.jsonl`
+
+Notes:
+
+- `--model_s3_uri` requires AWS credentials and either `boto3` or the `aws` CLI available in your environment.
+
+## Gradient accumulation
+
+`train_sm.py` supports gradient accumulation via:
+
+- `--effective_batch_size_queries` (default: `64`) to auto-compute `gradient_accumulation_steps`, or
+- `--gradient_accumulation_steps` to explicitly set it.
+
+The effective global queries per optimizer step is:
+
+`batch_size_queries * world_size * gradient_accumulation_steps`.

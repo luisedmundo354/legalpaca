@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Dict, Iterable, List, Sequence
 
 import torch
 from transformers import PreTrainedTokenizerBase
@@ -73,7 +72,7 @@ def _encode_queries(
     return torch.cat(all_vecs, dim=0)
 
 
-def _set_recall_at_k(hit_ranks: Sequence[int], k: int) -> float:
+def _recall_at_k(hit_ranks: Sequence[int], k: int) -> float:
     if not hit_ranks:
         return 0.0
     return float(sum(1 for r in hit_ranks if 1 <= r <= k)) / float(len(hit_ranks))
@@ -103,11 +102,17 @@ def evaluate_retrieval(
 
     passage_ids = list(corpus_by_passage_id.keys())
     passage_texts = [corpus_by_passage_id[pid].text for pid in passage_ids]
-    passage_doc_ids = [corpus_by_passage_id[pid].doc_id for pid in passage_ids]
     passage_index_by_id = {pid: i for i, pid in enumerate(passage_ids)}
 
     query_ids = [q.query_id for q in queries]
     query_texts = [q.query_text for q in queries]
+
+    allowed_other_case_labels = {"Analysis", "Background Facts", "Procedural History", "Conclusion"}
+    other_case_candidate_ids = [
+        pid
+        for pid, passage in corpus_by_passage_id.items()
+        if passage.label in allowed_other_case_labels
+    ]
 
     device = next(retriever.parameters()).device
     retriever.eval()
@@ -135,8 +140,13 @@ def evaluate_retrieval(
     candidate_sizes: List[int] = []
     retrieval_losses: List[float] = []
     for qi, query in enumerate(queries):
-        raw_candidate_ids = candidates_by_case.get(query.doc_id, [])
-        candidate_ids = [pid for pid in raw_candidate_ids if pid in passage_index_by_id]
+        same_case_ids = candidates_by_case.get(query.doc_id, [])
+        candidate_ids = [pid for pid in same_case_ids if pid in passage_index_by_id]
+        candidate_ids.extend(
+            pid
+            for pid in other_case_candidate_ids
+            if (not str(pid).startswith(f"{query.doc_id}::")) and (pid in passage_index_by_id)
+        )
         candidate_indices = [passage_index_by_id[pid] for pid in candidate_ids]
         if not candidate_indices:
             continue
@@ -162,7 +172,7 @@ def evaluate_retrieval(
 
     metrics: Dict[str, float] = {"eval_num_queries": float(len(hit_ranks))}
     for k in ks:
-        metrics[f"eval_set_recall_at_{int(k)}"] = _set_recall_at_k(hit_ranks, int(k))
+        metrics[f"eval_recall_at_{int(k)}"] = _recall_at_k(hit_ranks, int(k))
     metrics["eval_mrr"] = _mrr(hit_ranks)
     metrics["eval_avg_candidates"] = float(sum(candidate_sizes) / max(1, len(candidate_sizes)))
     metrics["eval_retrieval_loss"] = float(sum(retrieval_losses) / max(1, len(retrieval_losses)))

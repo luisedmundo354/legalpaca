@@ -185,7 +185,7 @@ class RetrievalEvalConfig:
     max_len_passage: int
     query_batch_size: int
     passage_batch_size: int
-    ks: Sequence[int] = (1, 5, 10, 20, 50)
+    ks: Sequence[int] = (1, 5, 10, 20)
 
 
 class SetEpochCallback(TrainerCallback):

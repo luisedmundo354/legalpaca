@@ -4,7 +4,7 @@ import json
 import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Sequence
 
 from torch.utils.data import Dataset
 
@@ -104,11 +104,15 @@ class MultiPositiveRetrievalTrainDataset(Dataset):
         self.max_pos_per_query = int(max_pos_per_query)
         self.num_same_case_negatives = int(num_same_case_negatives)
         self.num_distractor_negatives = int(num_distractor_negatives)
+        self.use_all_same_case_candidates = self.num_same_case_negatives < 0
+        self.max_candidates_per_case = max((len(v) for v in candidates_by_case.values()), default=0)
 
         if self.max_pos_per_query < 1:
             raise ValueError("max_pos_per_query must be >= 1")
-        if self.num_same_case_negatives < 0 or self.num_distractor_negatives < 0:
-            raise ValueError("negative counts must be >= 0")
+        if self.num_distractor_negatives < 0:
+            raise ValueError("num_distractor_negatives must be >= 0")
+        if self.max_candidates_per_case < 1:
+            raise ValueError("candidates_by_case must contain at least 1 candidate")
 
     def set_epoch(self, epoch: int) -> None:
         self.epoch = int(epoch)
@@ -138,27 +142,53 @@ class MultiPositiveRetrievalTrainDataset(Dataset):
         if not positive_passage_ids:
             raise ValueError(f"Query has no positives: {query.query_id}")
 
-        num_pos_in_candidates = min(len(positive_passage_ids), self.max_pos_per_query)
-        pos_for_candidates = rng.sample(positive_passage_ids, k=num_pos_in_candidates)
+        if self.use_all_same_case_candidates:
+            same_case_candidate_ids = list(self.candidates_by_case.get(query.doc_id, []))
+            if not same_case_candidate_ids:
+                raise ValueError(f"No candidates for case doc_id={query.doc_id}")
 
-        same_case_pool = [
-            pid
-            for pid in self.candidates_by_case.get(query.doc_id, [])
-            if pid not in set(positive_passage_ids)
-        ]
-        same_case_neg_count = self.num_same_case_negatives + (self.max_pos_per_query - num_pos_in_candidates)
-        same_case_negs = self._sample_from_pool(rng, same_case_pool, same_case_neg_count)
-        distractor_negs = self._sample_from_pool(rng, self.distractor_passage_ids, self.num_distractor_negatives)
+            num_pad = self.max_candidates_per_case - len(same_case_candidate_ids)
+            if num_pad < 0:
+                raise ValueError(
+                    f"doc_id={query.doc_id} has {len(same_case_candidate_ids)} candidates which exceeds"
+                    f" max_candidates_per_case={self.max_candidates_per_case}"
+                )
 
-        candidates_per_query = self.max_pos_per_query + self.num_same_case_negatives + self.num_distractor_negatives
-        candidate_passage_ids: List[str] = [*pos_for_candidates, *same_case_negs, *distractor_negs]
+            other_case_pool = [
+                pid
+                for pid in self.distractor_passage_ids
+                if (pid not in set(same_case_candidate_ids)) and (not str(pid).startswith(f"{query.doc_id}::"))
+            ]
+            other_case_needed = self.num_distractor_negatives + num_pad
+            other_case_negs = self._sample_from_pool(rng, other_case_pool, other_case_needed)
 
-        if len(candidate_passage_ids) < candidates_per_query:
-            pad_pool = same_case_pool or self.distractor_passage_ids or positive_passage_ids
-            candidate_passage_ids.extend(
-                self._sample_from_pool(rng, pad_pool, candidates_per_query - len(candidate_passage_ids))
+            candidate_passage_ids: List[str] = [*same_case_candidate_ids, *other_case_negs]
+        else:
+            num_pos_in_candidates = min(len(positive_passage_ids), self.max_pos_per_query)
+            pos_for_candidates = rng.sample(positive_passage_ids, k=num_pos_in_candidates)
+
+            same_case_pool = [
+                pid
+                for pid in self.candidates_by_case.get(query.doc_id, [])
+                if pid not in set(positive_passage_ids)
+            ]
+            same_case_neg_count = self.num_same_case_negatives + (self.max_pos_per_query - num_pos_in_candidates)
+            same_case_negs = self._sample_from_pool(rng, same_case_pool, same_case_neg_count)
+            distractor_negs = self._sample_from_pool(
+                rng,
+                [pid for pid in self.distractor_passage_ids if not str(pid).startswith(f"{query.doc_id}::")],
+                self.num_distractor_negatives,
             )
-        candidate_passage_ids = candidate_passage_ids[:candidates_per_query]
+
+            candidates_per_query = self.max_pos_per_query + self.num_same_case_negatives + self.num_distractor_negatives
+            candidate_passage_ids = [*pos_for_candidates, *same_case_negs, *distractor_negs]
+
+            if len(candidate_passage_ids) < candidates_per_query:
+                pad_pool = same_case_pool or self.distractor_passage_ids or positive_passage_ids
+                candidate_passage_ids.extend(
+                    self._sample_from_pool(rng, pad_pool, candidates_per_query - len(candidate_passage_ids))
+                )
+            candidate_passage_ids = candidate_passage_ids[:candidates_per_query]
 
         return {
             "query_id": query.query_id,
@@ -167,4 +197,3 @@ class MultiPositiveRetrievalTrainDataset(Dataset):
             "positive_passage_ids": positive_passage_ids,
             "candidate_passage_ids": candidate_passage_ids,
         }
-
