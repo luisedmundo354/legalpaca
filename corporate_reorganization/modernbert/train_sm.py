@@ -8,6 +8,13 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from retriever.provenance import (
+    EXPECTED_DATASET_MANIFEST_LOGICAL_PATH,
+    EXPECTED_DATASET_MANIFEST_SHA256,
+    EXPECTED_DEEPSPEED_CONFIG_SHA256,
+    EXPECTED_EXPERIMENT_CONFIG_SHA256,
+    EXPECTED_FOLD_MANIFEST_LOGICAL_PATH,
+    EXPECTED_FOLD_MANIFEST_SHA256,
+    EXPECTED_PASSAGE_INDEX_SHA256,
     EXPECTED_RUNTIME_VERSIONS,
     EXPECTED_SNAPSHOT_TREE_SHA256,
     EXPECTED_TRAINING_IMAGE,
@@ -20,6 +27,7 @@ from retriever.sampling import (
     SAMPLER_GLOBAL_UNIFORM,
     SAMPLER_LOCAL_UNIQUE,
 )
+from retriever.staged_data import validate_staged_dataset_and_fold
 
 
 SOURCE_DIR = Path(__file__).resolve().parent
@@ -31,22 +39,6 @@ DEFAULT_DEEPSPEED_CONFIG = SOURCE_DIR / "ds_zero3.json"
 CONTROLLED_QUERY_VIEWS = ("structured", "flat_masked")
 CONTROLLED_SAMPLERS = (SAMPLER_LOCAL_UNIQUE, SAMPLER_GLOBAL_UNIFORM)
 CONTROLLED_SEEDS = (17, 29, 43)
-EXPECTED_DATASET_MANIFEST_LOGICAL_PATH = (
-    "corporate_reorganization/data/final_annotations_gold/"
-    "processed_retrieval_v2/dataset_manifest.json"
-)
-EXPECTED_DATASET_MANIFEST_SHA256 = (
-    "cce04197b7f92c851c8e1e0b1fc0ff3f2757911d646a0079236c03070442e4be"
-)
-EXPECTED_FOLD_MANIFEST_LOGICAL_PATH = (
-    "corporate_reorganization/modernbert/experiments/retrieval_cv/configs/folds.json"
-)
-EXPECTED_FOLD_MANIFEST_SHA256 = (
-    "469858f2f8e42d0b19e53ee71af690f722482120348a2fe9719b99104758e00d"
-)
-EXPECTED_PASSAGE_INDEX_SHA256 = (
-    "641b7a6f9f77d308b9b2b4b38ab2318ffdbc61af4b4ad718caf0d3ad571ec43d"
-)
 EXPECTED_MODEL_SELECTION_PRIMARY = "validation_case_macro_set_recall_at_20"
 EXPECTED_MODEL_SELECTION_SECONDARY = (
     "validation_case_macro_first_gold_reciprocal_rank_full_ranking"
@@ -114,6 +106,42 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _artifact_file_record(path: Path, *, logical_path: str) -> dict[str, Any]:
+    path = Path(path)
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"Artifact record source must be a regular non-symlink file: {path}")
+    size = path.stat().st_size
+    if size < 1:
+        raise ValueError(f"Artifact record source must be non-empty: {path}")
+    return {"path": logical_path, "size": size, "sha256": _sha256(path)}
+
+
+def _validate_frozen_control_file_hashes(
+    *,
+    experiment_config_path: Path,
+    deepspeed_config_path: Path,
+) -> None:
+    expected = {
+        "Experiment config": (
+            Path(experiment_config_path),
+            EXPECTED_EXPERIMENT_CONFIG_SHA256,
+        ),
+        "DeepSpeed config": (
+            Path(deepspeed_config_path),
+            EXPECTED_DEEPSPEED_CONFIG_SHA256,
+        ),
+    }
+    for name, (path, expected_sha256) in expected.items():
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"{name} must be a regular non-symlink file: {path}")
+        actual_sha256 = _sha256(path)
+        if actual_sha256 != expected_sha256:
+            raise ValueError(
+                f"{name} bytes changed from the frozen study: "
+                f"actual={actual_sha256}, expected={expected_sha256}"
+            )
 
 
 def _is_sha256(value: object) -> bool:
@@ -331,71 +359,15 @@ def _validate_staged_fold_manifest(
     fold_manifest_path: Path,
 ) -> dict[str, Any]:
     """Bind the frozen fold manifest to identical SageMaker-mounted bytes."""
-
-    if not dataset_dir.is_dir() or dataset_dir.is_symlink():
-        raise ValueError(f"Staged dataset must be a real directory: {dataset_dir}")
-    if not fold_manifest_path.is_file() or fold_manifest_path.is_symlink():
-        raise ValueError(f"Fold manifest must be a regular file: {fold_manifest_path}")
-    actual_fold_hash = _sha256(fold_manifest_path)
-    if actual_fold_hash != EXPECTED_FOLD_MANIFEST_SHA256:
-        raise ValueError(
-            "Frozen fold-manifest SHA-256 changed: "
-            f"actual={actual_fold_hash}, expected={EXPECTED_FOLD_MANIFEST_SHA256}"
-        )
-    stored = _load_json_object(fold_manifest_path, name="Fold manifest")
-    expected_dataset_record = {
-        "dataset_manifest_path": EXPECTED_DATASET_MANIFEST_LOGICAL_PATH,
-        "dataset_manifest_sha256": EXPECTED_DATASET_MANIFEST_SHA256,
-        "dataset_schema_version": 2,
-        "output_sha256": stored.get("dataset", {}).get("output_sha256"),
-    }
-    if not _exact_json_equal(stored.get("dataset"), expected_dataset_record):
-        raise ValueError("Frozen fold manifest has an unexpected dataset identity")
-    output_hashes = expected_dataset_record["output_sha256"]
-    if type(output_hashes) is not dict or set(output_hashes) != {
-        "cases.jsonl",
-        "corpus.jsonl",
-        "pools/candidates_by_case.json",
-        "pools/candidates_global.json",
-        "queries/all.jsonl",
-    }:
-        raise ValueError("Frozen fold manifest has an unexpected dataset output inventory")
-
-    expected_files = {"dataset_manifest.json", *output_hashes}
-    expected_directories = {"pools", "queries"}
-    actual_files: set[str] = set()
-    actual_directories: set[str] = set()
-    for path in dataset_dir.rglob("*"):
-        relative = path.relative_to(dataset_dir).as_posix()
-        if path.is_symlink():
-            raise ValueError(f"Staged dataset entry must not be a symlink: {relative}")
-        if path.is_file():
-            actual_files.add(relative)
-        elif path.is_dir():
-            actual_directories.add(relative)
-        else:
-            raise ValueError(f"Unexpected staged dataset entry type: {relative}")
-    if actual_files != expected_files or actual_directories != expected_directories:
-        raise ValueError(
-            "Staged dataset inventory changed: "
-            f"files={sorted(actual_files)}, directories={sorted(actual_directories)}"
-        )
-
-    dataset_manifest_path = dataset_dir / "dataset_manifest.json"
-    actual_dataset_hash = _sha256(dataset_manifest_path)
-    if actual_dataset_hash != EXPECTED_DATASET_MANIFEST_SHA256:
-        raise ValueError(
-            "Staged dataset-manifest SHA-256 changed: "
-            f"actual={actual_dataset_hash}, expected={EXPECTED_DATASET_MANIFEST_SHA256}"
-        )
-    for relative_path, expected_hash in sorted(output_hashes.items()):
-        actual_hash = _sha256(dataset_dir / relative_path)
-        if actual_hash != expected_hash:
-            raise ValueError(
-                f"Staged dataset output hash changed for {relative_path}: "
-                f"actual={actual_hash}, expected={expected_hash}"
-            )
-    return stored
+    return validate_staged_dataset_and_fold(
+        dataset_dir=dataset_dir,
+        fold_manifest_path=fold_manifest_path,
+        expected_dataset_manifest_sha256=EXPECTED_DATASET_MANIFEST_SHA256,
+        expected_fold_manifest_sha256=EXPECTED_FOLD_MANIFEST_SHA256,
+        expected_dataset_manifest_logical_path=(
+            EXPECTED_DATASET_MANIFEST_LOGICAL_PATH
+        ),
+    )
 
 
 def _validate_experiment_config(
@@ -877,6 +849,10 @@ def _build_controlled_retriever(
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+    _validate_frozen_control_file_hashes(
+        experiment_config_path=args.experiment_config,
+        deepspeed_config_path=args.deepspeed_config,
+    )
     validate_preimport_environment(args.experiment_seed)
     validate_runtime_versions()
 
@@ -1377,11 +1353,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             "runtime_versions": EXPECTED_RUNTIME_VERSIONS,
             "training_image": EXPECTED_TRAINING_IMAGE,
             "experiment_config": {
-                "path": args.experiment_config.name,
+                "path": "experiment.json",
                 "sha256": _sha256(args.experiment_config),
             },
             "deepspeed_config": {
-                "path": args.deepspeed_config.name,
+                "path": "ds_zero3.json",
                 "sha256": _sha256(args.deepspeed_config),
             },
             "dataset": {
@@ -1395,7 +1371,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "rotation": rotation,
             },
             "snapshot": {
-                "manifest_path": args.snapshot_manifest.name,
+                "manifest_path": "modernbert_snapshot.json",
                 "manifest_sha256": _sha256(args.snapshot_manifest),
                 "tree_sha256": snapshot_manifest["tree_sha256"],
             },
@@ -1490,14 +1466,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             "tokenizer": tokenizer_record,
             "encoder_config": encoder_config_record,
             "wrapper_config": wrapper_record,
-            "candidate_trace_manifest": {
-                "path": "candidate_traces/manifest.json",
-                "sha256": _sha256(trace_manifest_path),
-            },
-            "validation_manifest": {
-                "path": "validation/manifest.json",
-                "sha256": _sha256(validation_manifest_path),
-            },
+            "candidate_trace_manifest": _artifact_file_record(
+                trace_manifest_path,
+                logical_path="candidate_traces/manifest.json",
+            ),
+            "validation_manifest": _artifact_file_record(
+                validation_manifest_path,
+                logical_path="validation/manifest.json",
+            ),
             "retained_checkpoints": retained_inventory,
         }
         artifact_manifest_path = args.output_dir / "artifact_manifest.json"

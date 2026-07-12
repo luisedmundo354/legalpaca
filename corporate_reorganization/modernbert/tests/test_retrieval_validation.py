@@ -49,6 +49,10 @@ from retriever.evaluation import (  # noqa: E402
     evaluate_fold_global_distributed,
 )
 from retriever.markup import SLOT_TOKEN  # noqa: E402
+from retriever.provenance import (  # noqa: E402
+    EXPECTED_TRAIN_QUERY_IDS_SHA256_BY_OUTER_FOLD,
+    EXPECTED_VALIDATION_IDENTITY_BY_CELL,
+)
 
 
 def _small_fixture():
@@ -314,6 +318,52 @@ class FrozenFoldGlobalInventoryTest(unittest.TestCase):
                     max(map(len, passage_chunks)),
                     VALIDATION_PASSAGE_BATCH_CAP,
                 )
+
+    def test_all_frozen_training_and_validation_identity_tables_match_real_data(self) -> None:
+        for rotation in self.fold_manifest["rotations"]:
+            outer_fold = rotation["outer_fold"]
+            train_case_ids = set(rotation["train"]["case_ids"])
+            train_query_ids = sorted(
+                query.query_id
+                for query in self.queries
+                if query.doc_id in train_case_ids
+            )
+            train_query_payload = json.dumps(
+                train_query_ids,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+            self.assertEqual(len(train_query_ids), rotation["train"]["queries"])
+            self.assertEqual(
+                hashlib.sha256(train_query_payload).hexdigest(),
+                EXPECTED_TRAIN_QUERY_IDS_SHA256_BY_OUTER_FOLD[outer_fold],
+            )
+
+            validation_role = rotation["validation"]
+            for query_view in ("structured", "flat_masked"):
+                with self.subTest(outer_fold=outer_fold, query_view=query_view):
+                    data = build_fold_global_validation_data(
+                        all_queries=self.queries,
+                        corpus_by_passage_id=self.corpus,
+                        passage_index_table=self.table,
+                        validation_case_ids=validation_role["case_ids"],
+                        expected_query_count=validation_role["queries"],
+                        expected_passage_count=validation_role["passages"],
+                        query_view=query_view,
+                    )
+                    self.assertEqual(
+                        {
+                            "case_ids_sha256": data.case_ids_sha256,
+                            "query_ids_sha256": data.query_ids_sha256,
+                            "passage_ids_sha256": data.passage_ids_sha256,
+                            "contract_sha256": data.contract_sha256,
+                        },
+                        EXPECTED_VALIDATION_IDENTITY_BY_CELL[
+                            (outer_fold, query_view)
+                        ],
+                    )
 
 
 class _ToyTokenizer:

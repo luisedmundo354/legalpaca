@@ -148,6 +148,51 @@ must reproduce exactly. The final BF16 safetensors artifact comes from this
 verified Engine B. A final artifact manifest is written last; its absence means
 the run is incomplete.
 
+## Canonical final evaluation
+
+Final evaluation uses the same stable ranking and multi-positive metric kernel
+as validation, projected through a complete result schema. Each system must
+provide exactly one finite CPU-float32 score for every query and every passage
+in the evaluated role fold. The source ranking is always
+`(score descending, passage_id ascending)`; all narrower pools are membership
+filters of that ranking and are never rescored.
+
+The four canonical regimes are:
+
+1. `same_case_legacy`: the query case with other-query-only golds excluded and
+   current-query gold precedence;
+2. `same_case_full`: every passage in the query case;
+3. `fold_global`: every passage in the one evaluated validation/test fold;
+4. `fold_global_context_excluded`: remove visible nongolds from the complete
+   fold-global ranking while retaining visible golds.
+
+`global_split` is not a fifth controlled regime. It is retained only as the
+reconstructed March label for the same role-local global construction on the
+historical four-case test split.
+
+At K=1/5/10/20, every query stores Hit, gold-set recall, exact-target recovery,
+and reciprocal rank of the first gold in the full ranking. Aggregation first
+averages queries within each case, then averages cases; query-micro values are
+also retained. Complete rankings and scores are the source of truth, and every
+aggregate is recomputed during strict readback.
+
+Controlled final lengths are 4,096/500, matching training and model selection.
+The March passage length of 600 is legacy-only. E5 is architecturally limited
+to 512 tokens; its controlled query truncation side is intentionally a required
+future evaluation-plan field and must be author-approved before the Step 8
+image is frozen.
+
+The local evaluator accepts no S3 URI. Later AWS orchestration mounts exact
+local artifacts and passes a canonical plan plus local bindings. Publication
+uses a sibling `.incomplete` directory and writes `artifact_manifest.json`
+last. A missing commit marker means failure.
+
+The frozen experiment configuration keeps `fold_global` as the primary
+endpoint and context exclusion as the robustness endpoint. The two same-case
+regimes are mandatory diagnostic reporting views, not additional co-primary
+endpoints; Step 9 plans bind all four output regimes without rewriting the
+Step-2-frozen experiment specification.
+
 ## Files
 
 - configs/folds.json is the immutable generated fold manifest. It records
@@ -176,6 +221,14 @@ Run the focused tests:
     PYTHONDONTWRITEBYTECODE=1 python -m unittest -v corporate_reorganization.modernbert.tests.test_retrieval_checkpointing
     PYTHONDONTWRITEBYTECODE=1 python -m unittest -v corporate_reorganization.modernbert.tests.test_retrieval_trainer_lifecycle_runtime
     PYTHONDONTWRITEBYTECODE=1 python -m unittest -v corporate_reorganization.modernbert.tests.test_retrieval_deepspeed_lifecycle_cuda
+    PYTHONDONTWRITEBYTECODE=1 python -m unittest -v corporate_reorganization.modernbert.tests.test_retrieval_canonical_evaluation
+    PYTHONDONTWRITEBYTECODE=1 python -m unittest -v corporate_reorganization.modernbert.tests.test_retrieval_legacy_march
+    PYTHONDONTWRITEBYTECODE=1 python -m unittest -v corporate_reorganization.modernbert.tests.test_retrieval_artifacts
+    PYTHONDONTWRITEBYTECODE=1 python -m unittest -v corporate_reorganization.modernbert.tests.test_retrieval_rankers
+    PYTHONDONTWRITEBYTECODE=1 python -m unittest -v corporate_reorganization.modernbert.tests.test_retrieval_evaluator_outputs
+    PYTHONDONTWRITEBYTECODE=1 python -m unittest -v corporate_reorganization.modernbert.tests.test_retrieval_evaluation_plan
+    PYTHONDONTWRITEBYTECODE=1 python -m unittest -v corporate_reorganization.modernbert.tests.test_retrieval_legacy_trainer_eval
+    PYTHONDONTWRITEBYTECODE=1 python -m unittest -v corporate_reorganization.modernbert.tests.test_retrieval_eval_cli
 
 The pinned-container runtime command is documented in
 `corporate_reorganization/modernbert/README.md`.

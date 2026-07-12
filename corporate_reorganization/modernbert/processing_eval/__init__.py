@@ -1,7 +1,5 @@
-from .experiment import SystemSpec, build_default_system_specs, run_retrieval_experiment
+"""Thin Processing adapter for the canonical local-plan evaluator."""
 
-__all__ = [
-    "SystemSpec",
-    "build_default_system_specs",
-    "run_retrieval_experiment",
-]
+from retriever.evaluator import run_local_controlled_evaluation_plan
+
+__all__ = ["run_local_controlled_evaluation_plan"]

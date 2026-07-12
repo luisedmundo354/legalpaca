@@ -344,6 +344,10 @@ class StrictEntrypointTest(unittest.TestCase):
                 controlled_train.parse_args(matrix_only)
 
     def test_frozen_experiment_and_deepspeed_configs_validate(self) -> None:
+        controlled_train._validate_frozen_control_file_hashes(
+            experiment_config_path=EXPERIMENT_CONFIG,
+            deepspeed_config_path=DEEPSPEED_CONFIG,
+        )
         experiment = json.loads(EXPERIMENT_CONFIG.read_text(encoding="utf-8"))
         controlled_train._validate_experiment_config(
             experiment,
@@ -420,6 +424,26 @@ class StrictEntrypointTest(unittest.TestCase):
 
         deepspeed = json.loads(DEEPSPEED_CONFIG.read_text(encoding="utf-8"))
         with tempfile.TemporaryDirectory() as tmp_dir:
+            reformatted_experiment = Path(tmp_dir) / "experiment.json"
+            reformatted_experiment.write_text(
+                json.dumps(experiment),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "bytes changed"):
+                controlled_train._validate_frozen_control_file_hashes(
+                    experiment_config_path=reformatted_experiment,
+                    deepspeed_config_path=DEEPSPEED_CONFIG,
+                )
+            reformatted_deepspeed = Path(tmp_dir) / "ds_zero3.json"
+            reformatted_deepspeed.write_text(
+                json.dumps(deepspeed),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "bytes changed"):
+                controlled_train._validate_frozen_control_file_hashes(
+                    experiment_config_path=EXPERIMENT_CONFIG,
+                    deepspeed_config_path=reformatted_deepspeed,
+                )
             for mutation in (
                 lambda value: value["bf16"].update(enabled=1),
                 lambda value: value["zero_optimization"].update(overlap_comm=False),
@@ -432,19 +456,61 @@ class StrictEntrypointTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "frozen exact"):
                     controlled_train._validate_deepspeed_config(path)
 
-    def test_staged_dataset_rebuilds_the_exact_frozen_fold_manifest(self) -> None:
+    def test_artifact_submanifest_records_include_exact_size_and_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            fixtures = (
+                ("candidate_traces/manifest.json", b'{"trace":true}\n'),
+                ("validation/manifest.json", b'{"validation":true}\n'),
+            )
+            for logical_path, payload in fixtures:
+                with self.subTest(logical_path=logical_path):
+                    path = root / Path(logical_path).name
+                    path.write_bytes(payload)
+                    self.assertEqual(
+                        controlled_train._artifact_file_record(
+                            path,
+                            logical_path=logical_path,
+                        ),
+                        {
+                            "path": logical_path,
+                            "size": len(payload),
+                            "sha256": hashlib.sha256(payload).hexdigest(),
+                        },
+                    )
+
+    def test_staged_dataset_and_fold_are_relocation_safe_and_exact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             staged = Path(tmp_dir) / "sagemaker-channel-data"
+            staged_folds = Path(tmp_dir) / "mounted-folds.json"
             shutil.copytree(DATASET_DIR, staged, symlinks=False)
+            shutil.copy2(controlled_train.DEFAULT_FOLDS_CONFIG, staged_folds)
             manifest = controlled_train._validate_staged_fold_manifest(
                 dataset_dir=staged,
-                fold_manifest_path=controlled_train.DEFAULT_FOLDS_CONFIG,
+                fold_manifest_path=staged_folds,
             )
             (staged / "unexpected.txt").write_text("unexpected", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "inventory changed"):
                 controlled_train._validate_staged_fold_manifest(
                     dataset_dir=staged,
-                    fold_manifest_path=controlled_train.DEFAULT_FOLDS_CONFIG,
+                    fold_manifest_path=staged_folds,
+                )
+            (staged / "unexpected.txt").unlink()
+            with (staged / "corpus.jsonl").open("ab") as destination:
+                destination.write(b"tampered\n")
+            with self.assertRaisesRegex(ValueError, "size changed|hash changed"):
+                controlled_train._validate_staged_fold_manifest(
+                    dataset_dir=staged,
+                    fold_manifest_path=staged_folds,
+                )
+
+            shutil.copy2(DATASET_DIR / "corpus.jsonl", staged / "corpus.jsonl")
+            with staged_folds.open("ab") as destination:
+                destination.write(b"tampered\n")
+            with self.assertRaisesRegex(ValueError, "fold-manifest SHA-256 changed"):
+                controlled_train._validate_staged_fold_manifest(
+                    dataset_dir=staged,
+                    fold_manifest_path=staged_folds,
                 )
         self.assertEqual(manifest["totals"], {"cases": 42, "queries": 490, "passages": 5286})
         self.assertEqual(

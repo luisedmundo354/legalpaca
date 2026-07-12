@@ -76,36 +76,67 @@ last as the successful-run commit marker.
 
 ## Evaluation
 
-CLI entry point:
-
-- `corporate_reorganization/modernbert/eval_retriever.py`
-
-Example (download model artifact from S3, evaluate on test split):
+`eval_retriever.py` and `processing_eval/run_eval_sm.py` are the same strict
+local-plan interface. They accept only a canonical immutable scientific plan
+whose exact bytes are recorded in the output identity, an environment-local
+bindings file, an absent output directory, and an explicit device. Step 9
+freezes the production plans in version control:
 
 ```bash
 python corporate_reorganization/modernbert/eval_retriever.py \
-  --processed_dir corporate_reorganization/data/final_annotations_gold/processed \
-  --split test \
-  --model_s3_uri s3://.../output/model.tar.gz \
-  --output_dir corporate_reorganization/data/final_annotations_gold/eval_runs/latest
+  --evaluation-plan /path/to/immutable-plan.json \
+  --local-bindings /path/to/local-bindings.json \
+  --output-dir /path/to/absent-result-directory \
+  --device cuda:0
 ```
 
-Outputs:
+The evaluator never downloads or discovers a model. AWS orchestration must
+mount already-extracted local artifacts and bind their expected hashes. Each
+controlled artifact must have the Step 6 `artifact_manifest.json` commit
+marker, exact full-tree hashes, matching fold/view/sampler/seed identities, the
+nested tokenizer and encoder config, and a BF16 tied-weight safetensors model.
+Loading is strict and immutable; no tokenizer patch, `strict=False`, retry, or
+fallback path exists.
 
-- `results.json` (global + breakdown metrics, includes random baseline)
-- `config.json`
-- `report.md` (quick summary table: model vs random)
-- `runs/topk_examples.jsonl`
+The Step 7 runner accepts only trained controlled dual-encoder artifacts. BM25,
+E5, the unfine-tuned ModernBERT control, and the production SageMaker
+Processing image are Step 8 additions; there is no partial baseline fallback
+in this interface.
 
-Notes:
+Every system first produces one finite CPU-float32 score for every query and
+role-fold passage. The canonical kernel ranks by score descending and passage
+ID ascending, then derives exactly four regimes without rescoring:
 
-- `--model_s3_uri` requires AWS credentials and either `boto3` or the `aws` CLI available in your environment.
-- The SageMaker processing entrypoint `processing_eval/run_eval_sm.py` now supports multi-system, multi-regime ablations including:
-  - `bm25_flat`
-  - `dense_open_flat`
-  - `base_modernbert_flat`
-  - `fine_tuned_flat`
-  - `fine_tuned_structured`
+- `same_case_legacy`
+- `same_case_full`
+- `fold_global`
+- `fold_global_context_excluded`
+
+The last regime filters visible nongold passages from the complete fold-global
+ranking; a visible gold is retained. `global_split` is only the historical
+March label for role-local fold-global evaluation and is rejected by the
+canonical interface.
+
+Successful output is an atomically published directory containing:
+
+- `evaluation_config.json`
+- `rankings.jsonl`, with every candidate score and per-query metric
+- `results.json`, with per-case, query-micro, and case-macro metrics
+- `artifact_manifest.json`, written last as the commit marker
+
+Readback reconstructs every result from the complete rankings and rejects
+missing queries/golds, duplicate or truncated candidates, unstable ties,
+non-finite scores, schema changes, or hash changes. The controlled final
+lengths are 4,096 query tokens and 500 passage tokens.
+
+`legacy_eval/march.py` is a separate hash-gated, read-only replay of the
+reconstructed March archive. It verifies 600 complete ranking rows and all
+3,300 stored numeric values using the historical names, tie order, and
+sequential summation. It does not claim model-to-ranking reproduction. The old
+S3 downloader, sampled random baseline, Cohere path, top-K-only output, and
+duplicate evaluator packages have been removed.
+`../notebooks/sagemaker_retriever_evaluation_processing.ipynb` is retained only
+as an explicitly non-runnable March provenance record.
 
 ## Controlled verification
 
@@ -152,6 +183,23 @@ The Step 6 CPU/Gloo contracts run in the same pinned base image:
       corporate_reorganization.modernbert.tests.test_retrieval_validation \
       corporate_reorganization.modernbert.tests.test_retrieval_checkpointing \
       corporate_reorganization.modernbert.tests.test_retrieval_trainer_lifecycle_runtime
+
+The Step 7 scientific, archive, artifact, ranker, bundle, and CLI contracts run
+in the pinned image as well:
+
+    python -m unittest -v \
+      corporate_reorganization.modernbert.tests.test_retrieval_canonical_evaluation \
+      corporate_reorganization.modernbert.tests.test_retrieval_legacy_march \
+      corporate_reorganization.modernbert.tests.test_retrieval_artifacts \
+      corporate_reorganization.modernbert.tests.test_retrieval_rankers \
+      corporate_reorganization.modernbert.tests.test_retrieval_evaluator_outputs \
+      corporate_reorganization.modernbert.tests.test_retrieval_evaluation_plan \
+      corporate_reorganization.modernbert.tests.test_retrieval_legacy_trainer_eval \
+      corporate_reorganization.modernbert.tests.test_retrieval_eval_cli
+
+The artifact suite's real tied-safetensors/ModernBERT test requires
+`ARR_TOKENIZER_DIR` to point at the frozen local snapshot. Without that
+variable it reports a skip, which is not evidence for the real-artifact gate.
 
 The derived runtime also contains a skip-capable two-GPU NCCL/ZeRO-3 lifecycle
 gate. A local skip is expected on a CPU-only host and is not a launch pass. Run

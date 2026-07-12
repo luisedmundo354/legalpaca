@@ -29,7 +29,7 @@ from retriever.checkpointing import (
 )
 from retriever.data import PassageIndexTable
 from retriever.distributed import build_global_candidate_plan, gather_owned_embeddings
-from retriever.eval import evaluate_retrieval
+from legacy_eval.trainer_eval import evaluate_retrieval
 from retriever.evaluation import (
     FoldGlobalValidationData,
     FoldGlobalValidationResult,
