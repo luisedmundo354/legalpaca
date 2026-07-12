@@ -17,7 +17,7 @@ if str(MODERNBERT_DIR) not in sys.path:
     sys.path.insert(0, str(MODERNBERT_DIR))
 
 import eval_retriever  # noqa: E402
-from processing_eval import run_eval_sm  # noqa: E402
+from processing_eval import evaluate_sm  # noqa: E402
 
 
 class EvaluationCliTest(unittest.TestCase):
@@ -122,8 +122,33 @@ class EvaluationCliTest(unittest.TestCase):
                 },
             )
 
-    def test_processing_entrypoint_is_the_same_cli(self) -> None:
-        self.assertIs(run_eval_sm.main, eval_retriever.main)
+    def test_processing_entrypoint_has_one_strict_complete_evaluation_cli(self) -> None:
+        args = evaluate_sm.parse_args(
+            [
+                "--evaluation-plan",
+                "plan.json",
+                "--local-bindings",
+                "bindings.json",
+                "--output-dir",
+                "result",
+                "--device",
+                "cuda:0",
+            ]
+        )
+        self.assertEqual(args.device, "cuda:0")
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            evaluate_sm.parse_args(
+                [
+                    "--evaluation-plan",
+                    "plan.json",
+                    "--local-bindings",
+                    "bindings.json",
+                    "--output-dir",
+                    "result",
+                    "--device",
+                    "cpu",
+                ]
+            )
 
 
 if __name__ == "__main__":

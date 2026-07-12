@@ -76,17 +76,25 @@ last as the successful-run commit marker.
 
 ## Evaluation
 
-`eval_retriever.py` and `processing_eval/run_eval_sm.py` are the same strict
-local-plan interface. They accept only a canonical immutable scientific plan
-whose exact bytes are recorded in the output identity, an environment-local
-bindings file, an absent output directory, and an explicit device. Step 9
-freezes the production plans in version control:
+`eval_retriever.py` retains the Step 7 controlled-artifact-only local-plan
+interface. `processing_eval/evaluate_sm.py` is the Step 8 production entry
+point: it requires the exact twelve controlled systems plus BM25 flat-plain,
+E5-base-v2 flat-plain, and the one fixed-seed ModernBERT-base flat-masked
+artifact. Both accept only canonical immutable plan bytes, explicit local
+bindings, an absent output directory, and an explicit device. Step 9 freezes
+the production plans in version control:
 
 ```bash
 python corporate_reorganization/modernbert/eval_retriever.py \
   --evaluation-plan /path/to/immutable-plan.json \
   --local-bindings /path/to/local-bindings.json \
   --output-dir /path/to/absent-result-directory \
+  --device cuda:0
+
+python corporate_reorganization/modernbert/processing_eval/evaluate_sm.py \
+  --evaluation-plan /path/to/immutable-complete-plan.json \
+  --local-bindings /path/to/complete-local-bindings.json \
+  --output-dir /path/to/absent-complete-result-directory \
   --device cuda:0
 ```
 
@@ -98,10 +106,12 @@ nested tokenizer and encoder config, and a BF16 tied-weight safetensors model.
 Loading is strict and immutable; no tokenizer patch, `strict=False`, retry, or
 fallback path exists.
 
-The Step 7 runner accepts only trained controlled dual-encoder artifacts. BM25,
-E5, the unfine-tuned ModernBERT control, and the production SageMaker
-Processing image are Step 8 additions; there is no partial baseline fallback
-in this interface.
+The Step 7 local runner still accepts only trained controlled dual-encoder
+artifacts. The Step 8 Processing runner requires all fifteen systems and
+prevalidates every controlled artifact, model snapshot, E5 pack, fixed-base
+artifact, data/config input, and image identity before scoring. It evaluates
+BM25, E5, the fixed ModernBERT control, and each trained model serially; there
+is no partial baseline or missing-artifact fallback.
 
 Every system first produces one finite CPU-float32 score for every query and
 role-fold passage. The canonical kernel ranks by score descending and passage
@@ -200,6 +210,24 @@ in the pinned image as well:
 The artifact suite's real tied-safetensors/ModernBERT test requires
 `ARR_TOKENIZER_DIR` to point at the frozen local snapshot. Without that
 variable it reports a skip, which is not evidence for the real-artifact gate.
+
+The Step 8 complete evaluator runs only in the derived Processing image. Build
+that image from the two frozen contexts documented in
+`experiments/retrieval_cv/README.md`, require identical config and manifest
+digests, then run its in-image contract check by local manifest digest:
+
+    VERIFIED_IMAGE_URI='arr-retrieval-eval@sha256:00feb4550b52712901933a546a561c18896304e7d72109f0a5ce49220dd12cf2'
+    docker run --rm --network none \
+      --entrypoint /opt/conda/bin/python \
+      "${VERIFIED_IMAGE_URI}" \
+      /opt/program/modernbert/processing_eval/image_smoke.py \
+      --contract /opt/program/modernbert/processing_eval/image_contract.json
+
+The check binds the exact Corretto/Anserini sparse runtime, neural package
+versions, frozen source bytes and modes, build identity, parent provenance,
+and offline environment. A tag is not launch evidence. Step 9 must compare the
+remote ECR manifest with the verified local manifest and launch only
+`repository@sha256:...`.
 
 The derived runtime also contains a skip-capable two-GPU NCCL/ZeRO-3 lifecycle
 gate. A local skip is expected on a CPU-only host and is not a launch pass. Run

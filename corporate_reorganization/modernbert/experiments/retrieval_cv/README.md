@@ -176,11 +176,44 @@ averages queries within each case, then averages cases; query-micro values are
 also retained. Complete rankings and scores are the source of truth, and every
 aggregate is recomputed during strict readback.
 
-Controlled final lengths are 4,096/500, matching training and model selection.
-The March passage length of 600 is legacy-only. E5 is architecturally limited
-to 512 tokens; its controlled query truncation side is intentionally a required
-future evaluation-plan field and must be author-approved before the Step 8
-image is frozen.
+Controlled and fixed-base ModernBERT lengths are 4,096/500, matching training
+and model selection. The March passage length of 600 is legacy-only. E5 has a
+hard 512-position architecture limit and uses one frozen semantic
+`focus_preserving_semantic_pack_v1`, not tokenizer-side truncation. After the
+two special positions and exact two-WordPiece `query: ` prefix, 508 positions
+remain. The pack keeps every focus role and target, reserves the root role and
+one complete source word, trims the tail of the longest visible focus content
+only when necessary, extends the root, then adds complete non-focus context
+steps in frozen order while skipping steps that do not fit. It never reads
+positive IDs or labels. The derived 490-query token artifact is separate from
+the immutable dataset and is recomputed exactly during validation. Three
+queries truncate one visible focus premise each, eleven have partial roots,
+and 409 retain at least one optional context step. A future paired
+flat/structured E5 diagnostic requires a new jointly fitting allocation; the
+reported off-the-shelf baseline remains flat-plain only.
+
+Each fold evaluation contains exactly 15 systems: the twelve controlled
+view/sampler/seed cells plus BM25 flat-plain, E5-base-v2 flat-plain, and one
+fold-independent fixed-seed ModernBERT-base flat-masked artifact. Every model
+and index is handled serially. BM25 uses Java 21, Pyserini 1.5.0, k1=0.9 and
+b=0.4, completes unreturned scores with float32 zero, and then enters the same
+canonical ranking kernel. The fixed ModernBERT artifact uses seed 17, the exact
+training tokenizer extension, BF16 weights, mask-slot query pooling, and
+passage mean pooling; two fresh builds must be byte-identical.
+
+The Processing image derives from the digest-pinned training DLC, adds
+Corretto 21.0.11.10.1 and the exact Pyserini/PyJNIus artifacts, and preserves
+the neural package inventory. Pyserini 1.5.0 declares newer dense-stack
+dependencies that conflict with this frozen evaluator, so its build occurs in
+an isolated stage with no dependency resolution; only its sparse JNI surface
+is copied into the final image. The final process rejects the high-level dense
+Pyserini path, the inherited Java 11 binary, mutable image tags, and any
+dependency or Anserini-JAR drift. Builds must use the BuildKit image exporter
+with `rewrite-timestamp=true` and `unpack=false`; ordinary `--load` preserves
+time-varying wheel-install metadata and is not a valid reproducibility gate.
+Both fresh builds use the same `SOURCE_DATE_EPOCH`, content hash, and VCS
+revision and must produce identical config and manifest digests before either
+digest is accepted.
 
 The local evaluator accepts no S3 URI. Later AWS orchestration mounts exact
 local artifacts and passes a canonical plan plus local bindings. Publication
@@ -202,7 +235,113 @@ Step-2-frozen experiment specification.
   samplers, training settings, metrics, analysis, and artifact hashes.
 - configs/modernbert_snapshot.json is the canonical five-file local snapshot
   inventory, revision, sizes, SHA-256 hashes, and tree hash.
+- configs/e5_snapshot.json freezes the six-file E5-base-v2 revision.
+- configs/evaluation_baselines.json freezes all three baseline protocols and
+  their system-to-query-view mapping.
+- configs/e5_focus_pack contains the canonical 490-query E5 input IDs and
+  strict readback manifest.
+- configs/fixed_base_artifact.json records the deterministic untrained
+  ModernBERT artifact/model/new-row hashes; the 288 MB artifact itself remains
+  an independently mounted evaluation input.
+- processing_eval/Dockerfile and image_contract.json define the allowlisted,
+  offline SageMaker Processing runtime. Launches use its ECR digest, never its
+  content-derived tag.
 - folds.py is the only fold generator and validator.
+
+Build the fixed untrained ModernBERT artifact only inside a locally verified
+Processing image addressed by digest. The two output paths and their sibling
+`.incomplete` paths must not exist. Mount the same validated snapshot at two
+different container paths; this is an intentional path-independence gate, not
+two aliases for one completed output:
+
+    VERIFIED_IMAGE_URI='arr-retrieval-eval@sha256:00feb4550b52712901933a546a561c18896304e7d72109f0a5ce49220dd12cf2'
+    MODERNBERT_SNAPSHOT='/tmp/arr-step8-modernbert-snapshot-final'
+    CONFIGS="$PWD/corporate_reorganization/modernbert/experiments/retrieval_cv/configs"
+    docker run --rm --network none --entrypoint /opt/conda/bin/python \
+      -v "${MODERNBERT_SNAPSHOT}:/inputs/modernbert-a:ro" \
+      -v "${CONFIGS}:/inputs/configs:ro" \
+      -v /tmp:/outputs \
+      "${VERIFIED_IMAGE_URI}" \
+      /opt/program/modernbert/processing_eval/build_base_modernbert.py \
+      --snapshot-dir /inputs/modernbert-a \
+      --snapshot-manifest /inputs/configs/modernbert_snapshot.json \
+      --baseline-config /inputs/configs/evaluation_baselines.json \
+      --artifact-contract /inputs/configs/fixed_base_artifact.json \
+      --output-dir /outputs/arr-step8-final-base1
+    docker run --rm --network none --entrypoint /opt/conda/bin/python \
+      -v "${MODERNBERT_SNAPSHOT}:/different/mount/modernbert-b:ro" \
+      -v "${CONFIGS}:/inputs/configs:ro" \
+      -v /tmp:/outputs \
+      "${VERIFIED_IMAGE_URI}" \
+      /opt/program/modernbert/processing_eval/build_base_modernbert.py \
+      --snapshot-dir /different/mount/modernbert-b \
+      --snapshot-manifest /inputs/configs/modernbert_snapshot.json \
+      --baseline-config /inputs/configs/evaluation_baselines.json \
+      --artifact-contract /inputs/configs/fixed_base_artifact.json \
+      --output-dir /outputs/arr-step8-final-base2
+    diff -qr /tmp/arr-step8-final-base1 /tmp/arr-step8-final-base2
+    sha256sum /tmp/arr-step8-final-base{1,2}/artifact_manifest.json
+
+Both manifest hashes must equal
+`ccff3fa4c141290ef9383992a4d3de2b8cfa5e50d02c4cd06e3fe52e92d0202b`.
+The builder rejects a changed baseline or artifact contract before model
+construction, revalidates the snapshot and both contracts immediately before
+publication, and publishes the commit marker with no-replace semantics.
+
+Freeze the build input twice before invoking BuildKit. The selected source
+parent is provenance for the uncommitted Step-8 snapshot; it must exist and be
+an ancestor of the checked-out revision. The exact frozen bytes and modes—not
+that parent commit—are the image source identity. The freezer derives and
+records the active Docker driver, Buildx version, and BuildKit version; callers
+cannot supply those identities:
+
+    SOURCE_PARENT_COMMIT='4b4f26852c59f809591edfced61bfc1d13650021'
+    SOURCE_PARENT_EPOCH="$(git show -s --format=%ct "${SOURCE_PARENT_COMMIT}")"
+    python corporate_reorganization/modernbert/processing_eval/build_context.py \
+      --modernbert-dir corporate_reorganization/modernbert \
+      --output-dir /tmp/arr-step8-final-context1 \
+      --source-parent-commit "${SOURCE_PARENT_COMMIT}" \
+      --source-parent-epoch "${SOURCE_PARENT_EPOCH}"
+    python corporate_reorganization/modernbert/processing_eval/build_context.py \
+      --modernbert-dir corporate_reorganization/modernbert \
+      --output-dir /tmp/arr-step8-final-context2 \
+      --source-parent-commit "${SOURCE_PARENT_COMMIT}" \
+      --source-parent-epoch "${SOURCE_PARENT_EPOCH}"
+    diff -qr /tmp/arr-step8-final-context1 /tmp/arr-step8-final-context2
+    BUILD_IDENTITY_SHA256="$(python corporate_reorganization/modernbert/processing_eval/build_context.py --validate-frozen-context /tmp/arr-step8-final-context1 --print-build-identity-sha256)"
+    CONTENT_TAG="build-sha256-${BUILD_IDENTITY_SHA256}"
+
+Build once from each independently frozen directory through the checked
+script. It re-derives the active toolchain, constructs the only accepted
+Buildx/exporter command, requires an absent metadata file, revalidates the
+context after BuildKit consumes it, and verifies metadata plus the locally
+stored image config, entrypoint, environment, labels, and manifest digest:
+
+    python corporate_reorganization/modernbert/processing_eval/build_context.py \
+      --build-frozen-context /tmp/arr-step8-final-context1 \
+      --metadata-file /tmp/arr-step8-final-image1.json \
+      --build-replica 1
+    python corporate_reorganization/modernbert/processing_eval/build_context.py \
+      --build-frozen-context /tmp/arr-step8-final-context2 \
+      --metadata-file /tmp/arr-step8-final-image2.json \
+      --build-replica 2
+
+The two metadata files must contain identical `containerimage.config.digest`
+and `containerimage.digest` values and Docker manifest media type
+`application/vnd.docker.distribution.manifest.v2+json`. Do not publish by
+changing one exporter flag and rebuilding. Step 9 must tag this already
+verified local manifest with the full ECR repository name, verify immutable-tag
+configuration, push once, read back the ECR digest and raw manifest, require
+exact local/remote digest equality, then pull and launch only by digest URI.
+
+The accepted local build identity is
+`249a373465c33d2af5f807eecf6016b08dc086ca04b588e3a2a6a5a640aa2fc8`;
+its frozen file-inventory SHA-256 is
+`96f8b4e5569404ed916cd69c4d765b3eb34cbd3f40e3eff8394e9de72f415dc4`.
+Both no-cache builds produced config digest
+`sha256:76c29a7f5ca0a1a36d0f8b53fe1e49f40ab199f8ff1bc594ddbb09107c7749e8`
+and manifest digest
+`sha256:00feb4550b52712901933a546a561c18896304e7d72109f0a5ce49220dd12cf2`.
 
 Regenerate into a fresh path and compare bytes:
 
@@ -229,6 +368,10 @@ Run the focused tests:
     PYTHONDONTWRITEBYTECODE=1 python -m unittest -v corporate_reorganization.modernbert.tests.test_retrieval_evaluation_plan
     PYTHONDONTWRITEBYTECODE=1 python -m unittest -v corporate_reorganization.modernbert.tests.test_retrieval_legacy_trainer_eval
     PYTHONDONTWRITEBYTECODE=1 python -m unittest -v corporate_reorganization.modernbert.tests.test_retrieval_eval_cli
+    PYTHONDONTWRITEBYTECODE=1 python -m unittest -v corporate_reorganization.modernbert.tests.test_retrieval_e5_packing
+    PYTHONDONTWRITEBYTECODE=1 python -m unittest -v corporate_reorganization.modernbert.tests.test_retrieval_baseline_artifacts
+    PYTHONDONTWRITEBYTECODE=1 python -m unittest -v corporate_reorganization.modernbert.tests.test_retrieval_complete_evaluation_plan
+    PYTHONDONTWRITEBYTECODE=1 python -m unittest -v corporate_reorganization.modernbert.tests.test_processing_image_contract
 
 The pinned-container runtime command is documented in
 `corporate_reorganization/modernbert/README.md`.

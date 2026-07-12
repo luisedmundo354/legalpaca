@@ -164,6 +164,30 @@ def _refresh_manifest_record(output: Path, relative_name: str) -> None:
 
 
 class EvaluationBundleTest(unittest.TestCase):
+    def test_expected_system_contract_is_deep_read_and_retracted(self) -> None:
+        bundle, corpus, queries = _bundle()
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            output = parent / "result"
+            with self.assertRaisesRegex(ValueError, "expected system contract"):
+                publish_and_validate_canonical_evaluation_bundle(
+                    bundle,
+                    output_dir=output,
+                    identity=_identity(),
+                    runtime_identity={"device": "cpu", "runtime": "pinned-test-fixture"},
+                    all_queries=queries,
+                    corpus_by_passage_id=corpus,
+                    expected_system_contract=(
+                        ("a_structured", "dual_encoder_artifact", "structured"),
+                        ("b_flat", "dense_e5", "flat_masked"),
+                        ("missing_third", "dense_e5", "flat_plain"),
+                    ),
+                )
+            self.assertFalse(output.exists())
+            incomplete = parent / ".result.incomplete"
+            self.assertTrue(incomplete.is_dir())
+            self.assertFalse((incomplete / "artifact_manifest.json").exists())
+
     def test_atomic_round_trip_and_path_independent_bytes(self) -> None:
         bundle, corpus, queries = _bundle()
         with tempfile.TemporaryDirectory() as temporary:

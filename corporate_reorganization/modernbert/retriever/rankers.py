@@ -411,6 +411,202 @@ def score_loaded_mean_pool_encoder(
     )
 
 
+def _pad_pretokenized_queries(
+    tokenizer,
+    sequences: tuple[tuple[int, ...], ...],
+    *,
+    torch_module,
+) -> Mapping[str, Any]:
+    if getattr(tokenizer, "padding_side", None) != "right":
+        raise RuntimeError("Pinned E5 tokenizer must use right padding")
+    pad_token_id = getattr(tokenizer, "pad_token_id", None)
+    if type(pad_token_id) is not int or pad_token_id < 0:
+        raise RuntimeError("Pinned E5 tokenizer has no exact pad token ID")
+    if not sequences:
+        raise ValueError("Pretokenized E5 query batch must not be empty")
+    max_length = max(len(sequence) for sequence in sequences)
+    if max_length > 512 or any(
+        not sequence
+        or any(type(token_id) is not int or token_id < 0 for token_id in sequence)
+        for sequence in sequences
+    ):
+        raise ValueError("Pretokenized E5 query batch contains an invalid sequence")
+    input_rows = [
+        [*sequence, *([pad_token_id] * (max_length - len(sequence)))]
+        for sequence in sequences
+    ]
+    mask_rows = [
+        [*([1] * len(sequence)), *([0] * (max_length - len(sequence)))]
+        for sequence in sequences
+    ]
+    input_ids = torch_module.tensor(input_rows, dtype=torch_module.long)
+    attention_mask = torch_module.tensor(mask_rows, dtype=torch_module.long)
+    token_type_ids = torch_module.zeros_like(input_ids)
+    return {
+        "input_ids": input_ids,
+        "attention_mask": attention_mask,
+        "token_type_ids": token_type_ids,
+    }
+
+
+def score_loaded_e5_encoder(
+    *,
+    model,
+    tokenizer,
+    query_ids: Sequence[str],
+    packed_query_input_ids: Sequence[Sequence[int]],
+    passage_ids: Sequence[str],
+    passage_texts: Sequence[str],
+    passage_prefix: str,
+    query_batch_size: int,
+    passage_batch_size: int,
+    max_len_passage: int,
+    device: str,
+    torch_module,
+):
+    """Score exact prepacked E5 queries without a second prefix or truncation."""
+
+    normalized_query_ids = _exact_ids(query_ids, name="query_ids")
+    normalized_passage_ids = _exact_ids(passage_ids, name="passage_ids")
+    packed_queries = tuple(tuple(sequence) for sequence in packed_query_input_ids)
+    if len(packed_queries) != len(normalized_query_ids):
+        raise ValueError("packed_query_input_ids must align exactly with query_ids")
+    if any(
+        len(sequence) < 4
+        or len(sequence) > 512
+        or tuple(sequence[1:3]) != (23_032, 1_024)
+        or sequence[0] != getattr(tokenizer, "cls_token_id", None)
+        or sequence[-1] != getattr(tokenizer, "sep_token_id", None)
+        for sequence in packed_queries
+    ):
+        raise ValueError("Pretokenized E5 query violates prefix, special-token, or length contract")
+    raw_passage_texts = tuple(passage_texts)
+    if len(raw_passage_texts) != len(normalized_passage_ids) or any(
+        type(text) is not str or not text.strip() for text in raw_passage_texts
+    ):
+        raise ValueError("passage_texts must align exactly with passage_ids")
+    if passage_prefix != "passage: " or type(passage_prefix) is not str:
+        raise ValueError("Pinned E5 passage prefix must be exact 'passage: '")
+    original_truncation_side = getattr(tokenizer, "truncation_side", None)
+    if original_truncation_side not in {"left", "right"}:
+        raise RuntimeError("Pinned E5 tokenizer has no exact truncation side")
+    prefixed_passages = tuple(f"{passage_prefix}{text}" for text in raw_passage_texts)
+    query_batch_size = _positive_int(query_batch_size, name="query_batch_size")
+    passage_batch_size = _positive_int(passage_batch_size, name="passage_batch_size")
+    if type(max_len_passage) is not int or max_len_passage != 500:
+        raise ValueError("Pinned E5 max_len_passage must be exact integer 500")
+    resolved_device = _explicit_device(device, torch_module)
+    try:
+        parameter_device = next(model.parameters()).device
+    except (AttributeError, StopIteration) as error:
+        raise TypeError("E5 encoder must expose at least one parameter") from error
+    if parameter_device != resolved_device:
+        raise RuntimeError(
+            f"Loaded E5 encoder is on {parameter_device}; expected {resolved_device}"
+        )
+
+    def encode_tokens(tokens: Mapping[str, Any], *, rows: int, name: str):
+        required = {"input_ids", "attention_mask", "token_type_ids"}
+        if set(tokens) != required:
+            raise ValueError(f"{name} token mapping changed: keys={sorted(tokens)}")
+        input_ids = tokens["input_ids"]
+        attention_mask = tokens["attention_mask"]
+        token_type_ids = tokens["token_type_ids"]
+        if (
+            not torch_module.is_tensor(input_ids)
+            or input_ids.dtype != torch_module.long
+            or input_ids.ndim != 2
+            or input_ids.shape[0] != rows
+            or not torch_module.is_tensor(attention_mask)
+            or attention_mask.dtype != torch_module.long
+            or attention_mask.shape != input_ids.shape
+            or not torch_module.is_tensor(token_type_ids)
+            or token_type_ids.dtype != torch_module.long
+            or token_type_ids.shape != input_ids.shape
+            or bool(token_type_ids.ne(0).any().item())
+        ):
+            raise TypeError(f"{name} tokenizer tensors are malformed")
+        device_tokens = {
+            key: value.to(resolved_device)
+            for key, value in tokens.items()
+        }
+        outputs = model(**device_tokens, return_dict=True)
+        last_hidden = getattr(outputs, "last_hidden_state", None)
+        if (
+            not torch_module.is_tensor(last_hidden)
+            or last_hidden.ndim != 3
+            or last_hidden.shape[:2] != device_tokens["input_ids"].shape
+            or not last_hidden.is_floating_point()
+        ):
+            raise TypeError(f"{name} encoder returned malformed hidden states")
+        mask = device_tokens["attention_mask"].unsqueeze(-1).type_as(last_hidden)
+        denominators = mask.sum(dim=1)
+        if bool(denominators.le(0).any().item()):
+            raise RuntimeError(f"{name} encoder received an empty pooling mask")
+        pooled = (last_hidden * mask).sum(dim=1) / denominators
+        embeddings = torch_module.nn.functional.normalize(pooled, p=2, dim=-1)
+        return _validate_embedding_batch(
+            embeddings,
+            rows=rows,
+            name=name,
+            torch_module=torch_module,
+        )
+
+    query_embeddings: list[Any] = []
+    passage_embeddings: list[Any] = []
+    was_training = bool(model.training)
+    model.eval()
+    tokenizer.truncation_side = "right"
+    try:
+        with torch_module.no_grad():
+            for start in range(0, len(packed_queries), query_batch_size):
+                batch = packed_queries[start : start + query_batch_size]
+                query_embeddings.append(
+                    encode_tokens(
+                        _pad_pretokenized_queries(
+                            tokenizer,
+                            batch,
+                            torch_module=torch_module,
+                        ),
+                        rows=len(batch),
+                        name="E5 query path",
+                    )
+                )
+            for start in range(0, len(prefixed_passages), passage_batch_size):
+                texts = prefixed_passages[start : start + passage_batch_size]
+                tokens = tokenizer(
+                    list(texts),
+                    truncation=True,
+                    max_length=max_len_passage,
+                    padding=True,
+                    return_tensors="pt",
+                    return_token_type_ids=True,
+                )
+                if not isinstance(tokens, Mapping):
+                    raise TypeError("E5 passage tokenizer did not return a mapping")
+                passage_embeddings.append(
+                    encode_tokens(
+                        {
+                            "input_ids": tokens.get("input_ids"),
+                            "attention_mask": tokens.get("attention_mask"),
+                            "token_type_ids": tokens.get("token_type_ids"),
+                        },
+                        rows=len(texts),
+                        name="E5 passage path",
+                    )
+                )
+    finally:
+        tokenizer.truncation_side = original_truncation_side
+        model.train(was_training)
+    return score_embedding_matrices(
+        query_embeddings=torch_module.cat(query_embeddings, dim=0),
+        passage_embeddings=torch_module.cat(passage_embeddings, dim=0),
+        query_ids=normalized_query_ids,
+        passage_ids=normalized_passage_ids,
+        torch_module=torch_module,
+    )
+
+
 def complete_bm25_scores_from_hits(
     *,
     query_ids: Sequence[str],

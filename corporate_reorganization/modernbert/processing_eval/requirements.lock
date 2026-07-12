@@ -1,0 +1,5 @@
+pyjnius==1.7.0 \
+    --hash=sha256:73f053085ce9ce04b55c09a9b5d756e40783f30b3ad47008960d23241cf344d7
+
+pyserini==1.5.0 \
+    --hash=sha256:ecaa7b165690b3daa659b16e52ef5edabd29c903129dd132d03857dd5aeee650

@@ -17,6 +17,7 @@ from retriever.rankers import (  # noqa: E402
     complete_bm25_scores_from_hits,
     score_embedding_matrices,
     score_loaded_dual_encoder,
+    score_loaded_e5_encoder,
     score_loaded_mean_pool_encoder,
     validate_complete_score_matrix,
 )
@@ -87,6 +88,68 @@ class _FakeMeanPoolEncoder(torch.nn.Module):
     def forward(self, *, input_ids, attention_mask, return_dict):
         if return_dict is not True:
             raise AssertionError("controlled ranker must request a mapping-like output")
+        hidden = torch.stack(
+            (
+                input_ids.to(dtype=torch.float32),
+                attention_mask.to(dtype=torch.float32),
+            ),
+            dim=-1,
+        )
+        return SimpleNamespace(last_hidden_state=hidden)
+
+
+class _FakeE5Tokenizer:
+    padding_side = "right"
+    truncation_side = "left"
+    pad_token_id = 0
+    cls_token_id = 101
+    sep_token_id = 102
+
+    def __init__(self) -> None:
+        self.passage_calls: list[tuple[str, ...]] = []
+        self.passage_truncation_sides: list[str] = []
+
+    def __call__(
+        self,
+        texts,
+        *,
+        truncation,
+        max_length,
+        padding,
+        return_tensors,
+        return_token_type_ids,
+    ):
+        if (
+            truncation is not True
+            or max_length != 500
+            or padding is not True
+            or return_tensors != "pt"
+            or return_token_type_ids is not True
+        ):
+            raise AssertionError("unexpected E5 passage-tokenizer arguments")
+        if self.truncation_side != "right":
+            raise AssertionError("E5 passage tokenizer did not use right truncation")
+        self.passage_calls.append(tuple(texts))
+        self.passage_truncation_sides.append(self.truncation_side)
+        input_ids = torch.tensor(
+            [[101, 601 + position, 102] for position, _ in enumerate(texts)],
+            dtype=torch.long,
+        )
+        return {
+            "input_ids": input_ids,
+            "attention_mask": torch.ones_like(input_ids),
+            "token_type_ids": torch.zeros_like(input_ids),
+        }
+
+
+class _FakeE5Encoder(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.anchor = torch.nn.Parameter(torch.tensor(1.0))
+
+    def forward(self, *, input_ids, attention_mask, token_type_ids, return_dict):
+        if return_dict is not True or bool(token_type_ids.ne(0).any().item()):
+            raise AssertionError("E5 scorer changed the explicit token-type contract")
         hidden = torch.stack(
             (
                 input_ids.to(dtype=torch.float32),
@@ -272,6 +335,52 @@ class LoadedEncoderScoreTest(unittest.TestCase):
                 passage_batch_size=1,
                 max_len_query=512,
                 max_len_passage=512,
+                device="cpu",
+                torch_module=torch,
+            )
+
+    def test_e5_scorer_consumes_exact_pretokenized_queries_without_retokenizing(self) -> None:
+        model = _FakeE5Encoder()
+        model.train()
+        tokenizer = _FakeE5Tokenizer()
+        scores = score_loaded_e5_encoder(
+            model=model,
+            tokenizer=tokenizer,
+            query_ids=("q1", "q2"),
+            packed_query_input_ids=(
+                (101, 23_032, 1_024, 701, 102),
+                (101, 23_032, 1_024, 702, 703, 102),
+            ),
+            passage_ids=("p1", "p2"),
+            passage_texts=("first", "second"),
+            passage_prefix="passage: ",
+            query_batch_size=2,
+            passage_batch_size=2,
+            max_len_passage=500,
+            device="cpu",
+            torch_module=torch,
+        )
+        self.assertEqual(tuple(scores.shape), (2, 2))
+        self.assertEqual(scores.dtype, torch.float32)
+        self.assertTrue(model.training)
+        self.assertEqual(
+            tokenizer.passage_calls,
+            [("passage: first", "passage: second")],
+        )
+        self.assertEqual(tokenizer.passage_truncation_sides, ["right"])
+        self.assertEqual(tokenizer.truncation_side, "left")
+        with self.assertRaisesRegex(ValueError, "prefix"):
+            score_loaded_e5_encoder(
+                model=model,
+                tokenizer=tokenizer,
+                query_ids=("q1",),
+                packed_query_input_ids=((101, 999, 1_024, 701, 102),),
+                passage_ids=("p1",),
+                passage_texts=("first",),
+                passage_prefix="passage: ",
+                query_batch_size=1,
+                passage_batch_size=1,
+                max_len_passage=500,
                 device="cpu",
                 torch_module=torch,
             )
