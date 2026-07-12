@@ -25,26 +25,31 @@ tokenizer snapshot:
       corporate_reorganization.modernbert.tests.test_relations \
       corporate_reorganization.modernbert.tests.test_final_annotations_builder
 
-## Training (SageMaker / Deepspeed)
+## Training paths
 
-Entry point:
+`train_sm.py` is the strict controlled ARR entry point. It accepts one frozen
+outer fold, query view, sampler, and experiment seed; rejects unknown options;
+validates exact data, fold, model, runtime, and DeepSpeed inputs; and refuses a
+nonempty output directory. It loads the pinned ModernBERT snapshot only from
+the SageMaker `base_model` channel with Hub access disabled.
+The GPU backend is explicitly FlashAttention 2.7.3 with ModernBERT's
+`deterministic_flash_attn` flag set and checked on every attention module; the
+snapshot's original false value is never used for controlled training.
 
-- `corporate_reorganization/modernbert/train_sm.py`
+`legacy_train_sm.py` preserves the reconstructed permissive March entry point
+and sampler behavior. It is isolated for the separately labeled legacy
+replication attempt and must not be used for the controlled comparison.
 
-Key behavior:
+The controlled encoder remains multi-positive: a query embedding is the hidden
+state at its single slot token and passage embeddings are mean pooled over
+non-padding tokens after position zero. The controlled samplers and complete
+scientific matrix are documented in `experiments/retrieval_cv/README.md`.
 
-- **Multi-positive** contrastive loss (a query can have 1+ positives).
-- Query embedding = hidden state at the `[MASK]` token.
-- Passage embedding = mean pooling over non-padding tokens (excluding position 0).
-- Negatives = all same-case candidates (padded to max case size) + cross-case negatives (default 32, label-filtered).
-- Validation logs both **contrastive loss** (`eval_loss`) and **retrieval metrics** (e.g. `eval_recall_at_20`).
-- `--query_view` supports:
-  - `structured`: existing tree/markup query
-  - `flat_masked`: flat/raw query with the same content and one `[MASK]`
-
-SageMaker notebook template:
-
-- `corporate_reorganization/notebooks/sagemaker_retriever_training.ipynb`
+Step 4 freezes process determinism, global query ordering, lossless final
+batches, and optimizer-window normalization. The real cross-rank passage path
+is intentionally not certified yet: Step 5 must add unique integer passage
+tables, padded autograd-aware gathering, and remote-passage gradients before a
+controlled training job can be launched.
 
 ## Evaluation
 
@@ -79,13 +84,41 @@ Notes:
   - `fine_tuned_flat`
   - `fine_tuned_structured`
 
-## Gradient accumulation
+## Step 4 verification
 
-`train_sm.py` supports gradient accumulation via:
+The dependency-free controls run in the local environment:
 
-- `--effective_batch_size_queries` (default: `64`) to auto-compute `gradient_accumulation_steps`, or
-- `--gradient_accumulation_steps` to explicitly set it.
+    PYTHONDONTWRITEBYTECODE=1 python -m unittest -v \
+      corporate_reorganization.modernbert.tests.test_retrieval_training_control
 
-The effective global queries per optimizer step is:
+The Torch/Transformers/Accelerate contracts run in the exact frozen AWS base
+image (DeepSpeed 0.17.1 is installed later from `requirements.txt`):
 
-`batch_size_queries * world_size * gradient_accumulation_steps`.
+    docker run --rm --entrypoint python \
+      -e PYTHONDONTWRITEBYTECODE=1 \
+      -v "$PWD:/workspace:ro" -w /workspace \
+      763104351884.dkr.ecr.us-east-1.amazonaws.com/huggingface-pytorch-training@sha256:e6ad17f88da21a7dc1347e68a2009a23827ca24fffdc03226095f46d0e9e53c9 \
+      -m unittest -v \
+      corporate_reorganization.modernbert.tests.test_retrieval_training_runtime
+
+The derived runtime must also install the exact requirements and pass the
+DeepSpeed/Hugging Face reconciliation suite:
+
+    python -m pip install --no-cache-dir \
+      -r corporate_reorganization/modernbert/requirements.txt
+    python -m unittest -v \
+      corporate_reorganization.modernbert.tests.test_retrieval_training_deepspeed_runtime
+
+The exact snapshot tokenizer contract is a separate required suite. It freezes
+the Transformers 4.49 behavior where 19 markup tokens are supplied and
+`add_special_tokens` returns 19, while `[MASK]` already exists so the net
+vocabulary growth is 18 rows (50,368 to 50,386):
+
+    docker run --rm --entrypoint python \
+      -e ARR_TOKENIZER_DIR=/hf/models--answerdotai--ModernBERT-base/snapshots/8949b909ec900327062f0ebf497f51aef5e6f0c8 \
+      -e HF_HUB_OFFLINE=1 -e TRANSFORMERS_OFFLINE=1 \
+      -v "$PWD:/workspace:ro" -v "$HOME/.cache/huggingface/hub:/hf:ro" \
+      -w /workspace \
+      763104351884.dkr.ecr.us-east-1.amazonaws.com/huggingface-pytorch-training@sha256:e6ad17f88da21a7dc1347e68a2009a23827ca24fffdc03226095f46d0e9e53c9 \
+      -m unittest -v \
+      corporate_reorganization.modernbert.tests.test_retrieval_training_snapshot_runtime

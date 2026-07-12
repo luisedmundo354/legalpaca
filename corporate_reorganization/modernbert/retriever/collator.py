@@ -27,16 +27,29 @@ class RetrievalBatchCollator:
             raise ValueError(f"{SLOT_TOKEN} is not in the tokenizer vocabulary")
 
     def __call__(self, examples: Sequence[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
-        query_texts: List[str] = [str(ex["query_text"]) for ex in examples]
+        if not examples:
+            raise ValueError("RetrievalBatchCollator received an empty batch")
+        for row_index, example in enumerate(examples):
+            if type(example.get("is_dummy")) is not bool:
+                raise ValueError(
+                    f"Batch row {row_index} must define reserved boolean field is_dummy"
+                )
+        real_examples = [example for example in examples if not example["is_dummy"]]
+        if not real_examples:
+            raise ValueError(
+                "Step 4 forbids an all-dummy local batch; the global batch plan must give every rank a real query"
+            )
+
+        query_texts: List[str] = [str(ex["query_text"]) for ex in real_examples]
 
         positive_ids_per_query: List[List[str]] = [
-            [str(x) for x in (ex.get("positive_passage_ids") or [])] for ex in examples
+            [str(x) for x in (ex.get("positive_passage_ids") or [])] for ex in real_examples
         ]
         if any(len(x) < 1 for x in positive_ids_per_query):
             raise ValueError("Found a query with empty positive_passage_ids")
 
         candidate_ids_per_query: List[List[str]] = [
-            [str(x) for x in (ex.get("candidate_passage_ids") or [])] for ex in examples
+            [str(x) for x in (ex.get("candidate_passage_ids") or [])] for ex in real_examples
         ]
         if any(len(x) < 1 for x in candidate_ids_per_query):
             raise ValueError("Found a query with empty candidate_passage_ids")
@@ -85,5 +98,5 @@ class RetrievalBatchCollator:
             "passage_attention_mask": passage_tok["attention_mask"],
             "passage_id_hashes": passage_hash_tensor,
             "positive_id_hashes": pos_hash_tensor,
+            "valid_query_count": torch.tensor(len(real_examples), dtype=torch.long),
         }
-

@@ -70,6 +70,50 @@ case-wide gold exclusion, 56+4 Background-Facts configuration, replacement
 paths, negative compensation, and query-index-based Python RNG behavior. It is
 not used by the controlled comparison.
 
+## Controlled training infrastructure
+
+The strict controlled entry point is `modernbert/train_sm.py`; the reconstructed
+March path is `modernbert/legacy_train_sm.py`. The controlled process requires
+the exact AWS training image recorded in `configs/experiment.json`, the pinned
+Python/package inventory, four MPI ranks on one `ml.g5.12xlarge`, and the
+five-file ModernBERT snapshot described by `configs/modernbert_snapshot.json`.
+It validates `PYTHONHASHSEED`, `CUBLAS_WORKSPACE_CONFIG=:4096:8`, offline Hub
+flags, every snapshot file, and the complete ZeRO-3 configuration before use.
+The exact tokenizer extension supplies 19 markup tokens; Transformers 4.49
+returns 19 from `add_special_tokens`, while the existing `[MASK]` token makes
+the net vocabulary growth 18 rows, from 50,368 to 50,386.
+
+The pinned image includes FlashAttention 2.7.3. ModernBERT's base config stores
+`deterministic_flash_attn=false`, so the controlled entry point explicitly
+changes that runtime config to true before model construction, requires the
+resolved `flash_attention_2` backend, and checks the flag on every attention
+module. `FLASH_ATTENTION_DETERMINISTIC=1` is also a required pre-import
+environment invariant. PyTorch deterministic mode alone does not control this
+custom kernel. The snapshot's unspecified `reference_compile` setting is also
+forced and asserted to false, preventing runtime-dependent Triton compilation.
+
+Each epoch orders all 294 training query IDs by a versioned SHA-256 digest. A
+global batch plan contains 76 rank-ordered four-row batches, which Accelerate
+1.4 shards exactly once into 19 batches per rank. Ten sentinel rows pad only
+the final global microbatch; the real-query counts there are 2, 2, 1, and 1.
+Every real query appears exactly once. The three optimizer windows therefore
+contain 128, 128, and 38 real queries and produce three updates per epoch, or
+60 updates over 20 epochs.
+
+For local summed query loss S, global valid-query count N for the complete
+optimizer window, and data-parallel size D=4, training backpropagates D*S/N.
+DeepSpeed averages gradients across ranks, so this equals the mean over every
+real query without another gradient-accumulation division. The DeepSpeed
+boundary is set explicitly on every microbatch, including the final
+three-microbatch window, and gradient clipping is frozen at 1.0 in
+`ds_zero3.json`.
+
+This is not yet an executable end-to-end controlled retriever. Step 5 owns the
+remaining cross-rank passage correction: integer passage IDs, deterministic
+global deduplication, variable-shape padding, autograd-aware embedding gather,
+invalid masks, and remote-passage gradients. The current passage collective is
+deliberately left unchanged rather than hidden behind a temporary fallback.
+
 ## Files
 
 - configs/folds.json is the immutable generated fold manifest. It records
@@ -77,6 +121,8 @@ not used by the controlled comparison.
   trace, final folds, and all five role rotations.
 - configs/experiment.json is the locked scientific design: seeds, query views,
   samplers, training settings, metrics, analysis, and artifact hashes.
+- configs/modernbert_snapshot.json is the canonical five-file local snapshot
+  inventory, revision, sizes, SHA-256 hashes, and tree hash.
 - folds.py is the only fold generator and validator.
 
 Regenerate into a fresh path and compare bytes:
@@ -91,3 +137,7 @@ Run the focused tests:
 
     PYTHONDONTWRITEBYTECODE=1 python -m unittest -v corporate_reorganization.modernbert.tests.test_retrieval_cv_folds
     PYTHONDONTWRITEBYTECODE=1 python -m unittest -v corporate_reorganization.modernbert.tests.test_retrieval_sampling
+    PYTHONDONTWRITEBYTECODE=1 python -m unittest -v corporate_reorganization.modernbert.tests.test_retrieval_training_control
+
+The pinned-container runtime command is documented in
+`corporate_reorganization/modernbert/README.md`.
