@@ -27,7 +27,7 @@ tokenizer snapshot:
 
 ## Training paths
 
-`train_sm.py` is the strict controlled ARR entry point. It accepts one frozen
+`train_sm.py` is the strict 20-epoch controlled ARR entry point. It accepts one frozen
 outer fold, query view, sampler, and experiment seed; rejects unknown options;
 validates exact data, fold, model, runtime, and DeepSpeed inputs; and refuses a
 nonempty output directory. It loads the pinned ModernBERT snapshot only from
@@ -229,10 +229,49 @@ and offline environment. A tag is not launch evidence. Step 9 must compare the
 remote ECR manifest with the verified local manifest and launch only
 `repository@sha256:...`.
 
-The derived runtime also contains a skip-capable two-GPU NCCL/ZeRO-3 lifecycle
-gate. A local skip is expected on a CPU-only host and is not a launch pass. Run
-that gate plus the existing four-GPU NCCL/BF16 tests on the production-shaped
-`ml.g5.12xlarge` pilot before submitting the 60 controlled jobs.
+The derived evaluation runtime intentionally does not embed training code or
+the GPU lifecycle tests. A local skip is expected on a CPU-only host and is not
+a launch pass. Step 9 builds a canonical source bundle from a clean committed
+worktree; mount that separately to run the two-GPU lifecycle gate and the
+four-GPU NCCL/BF16 tests on a production-shaped `ml.g5.12xlarge` pilot before
+submitting the 60 controlled jobs.
 
     python -m unittest -v \
       corporate_reorganization.modernbert.tests.test_retrieval_deepspeed_lifecycle_cuda
+
+Do not let the SageMaker training toolkit install `requirements.txt` at job
+startup. Archived March runs built different DeepSpeed wheel bytes for the same
+declared version. `training_image/` therefore derives a separate image from the
+SDK-selected DLC, installs four direct hash-locked artifacts with dependency
+resolution disabled, preserves the original SageMaker training entrypoint, and
+validates the complete runtime contract. Two no-cache builds must have the same
+Docker config and manifest digests before publication; jobs use only the ECR
+digest URI.
+
+The checked builder rejects a different Docker driver, Buildx/BuildKit version,
+source inventory, exporter option, existing metadata path, config digest, or
+manifest digest. Rebuild the two accepted replicas only with:
+
+    python -m corporate_reorganization.modernbert.training_image.build \
+      --modernbert-dir "$PWD/corporate_reorganization/modernbert" \
+      --metadata-file /tmp/arr-training-replica-1.json \
+      --build-replica 1
+    python -m corporate_reorganization.modernbert.training_image.build \
+      --modernbert-dir "$PWD/corporate_reorganization/modernbert" \
+      --metadata-file /tmp/arr-training-replica-2.json \
+      --build-replica 2
+
+Both metadata paths must be absent. Each invocation uses `--pull --no-cache`,
+the Docker image exporter with timestamp rewriting and no unpack, and the
+recorded Step-8 epoch. It accepts only manifest `78221762...` and config
+`aff8c9ca...`; a different rebuild is a hard failure, not a replacement image.
+
+The Step-9 `retrieval_cv_training_plan` is intentionally non-submittable. The
+current Step-8 training source records the base DLC identity in controlled
+artifacts, while the actual future job must record both the derived training
+image digest/runtime inventory and that base identity. The planned two-epoch
+determinism and corrected-data legacy records also have no executable strict
+entry point yet, and logical snake-case hyperparameters still require an exact
+hyphenated SageMaker CLI rendering contract. These gates must be implemented
+and re-frozen before any training job is submitted; the evaluation-image
+Processing runtime smoke does not waive them.

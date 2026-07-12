@@ -247,6 +247,55 @@ Step-2-frozen experiment specification.
   offline SageMaker Processing runtime. Launches use its ECR digest, never its
   content-derived tag.
 - folds.py is the only fold generator and validator.
+- configs/orchestration.json binds the verified evaluation image, the derived
+  training image and its distinct base DLC, the exact Step-8 source parent,
+  immutable inputs, and planned templates for the 60 controlled runs, two
+  legacy attempts, and two determinism smokes.
+- configs/evaluation_runtime_identity.json is the compact canonical identity
+  emitted by the verified evaluation image under the exact Processing request
+  environment. CloudWatch verification requires its SHA-256
+  `75c1d8fd...`; the Docker stdout formatting hash is not the identity hash.
+- config.py and manifest.py validate canonical configuration bytes, build a
+  commit-exact normalized source archive without symlinks, ignored files, or
+  runtime requirements, and expand the exact 60+2+2 training plan.
+- aws.py uses low-level, one-attempt Botocore clients for immutable ECR
+  publication, checked versioned-S3 primitives, Processing preflight, and one
+  explicitly submitted runtime smoke. It never retries or selects a fallback.
+- aggregate.py performs only strict five-fold completeness and artifact
+  readback. Statistical aggregation, intervals, contrasts, and figures remain
+  Step 12.
+
+The Step-9 training manifest is deliberately
+`retrieval_cv_training_plan`, not a launch manifest. It is hard-blocked and
+cannot be submitted. Its exact blockers are: controlled artifacts still record
+only the base DLC rather than both derived/base image identities; the separate
+2-epoch/6-update determinism entry point and validator do not yet exist; the
+legacy adapter cannot consume corrected-v2 `queries/all.jsonl` and has no
+strict artifact protocol; and SageMaker scientific keys have not yet been
+rendered to the hyphenated CLI spellings accepted by `train_sm.py`. Those are
+implementation gates for the next commits, not implicit behavior or fallbacks.
+The immediate Processing runtime smoke is independent of this blocked plan.
+The S3 helpers are not yet a training-staging coordinator: before training,
+one operation must validate the bucket, prove the complete versioned prefix
+has never contained an object or delete marker, stage every object, and bind
+each VersionId and readback hash into launch evidence. `If-None-Match` alone is
+not treated as historical-prefix immutability.
+
+The immediate Processing smoke is
+`evaluation_image_runtime_smoke_v1`. It validates account-local digest pull,
+SageMaker startup, and the embedded image contract through CloudWatch. It has
+no model inputs and produces no rankings, so it is not a fold-0 evaluation and
+cannot satisfy any scientific execution gate. A complete 15-system fold job is
+invalid until all twelve controlled artifacts for that fold exist.
+
+AWS-local values live only in ignored `aws.local.json`; credentials and profile
+names are forbidden. Run the CLI with the pinned `legalpacaenv`, because
+source bundling requires Python 3.11.13 with compile/runtime zlib 1.2.13 and
+preflight requires the exact SageMaker 2.248.2/Boto3 1.39.12 stack. Inputs and
+outputs use unused prefixes in the versioned, SSE-S3 `ir-sagemaker` bucket.
+Container entrypoint/arguments and `/opt/ml/processing/` semantics follow the
+[AWS custom Processing container contract](https://docs.aws.amazon.com/sagemaker/latest/dg/build-your-own-processing-container.html)
+and [Processing input/output contract](https://docs.aws.amazon.com/sagemaker/latest/dg/byoc-input-and-output.html).
 
 Build the fixed untrained ModernBERT artifact only inside a locally verified
 Processing image addressed by digest. The two output paths and their sibling
