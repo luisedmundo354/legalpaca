@@ -35,6 +35,7 @@ LABEL_TOKEN_BY_LABEL: Dict[str, str] = {
 ALLOWED_POSITIVE_LABELS: Set[str] = {LABEL_RULE, LABEL_ANALYSIS, LABEL_CONCLUSION}
 MISSING_MARKER = "[MISSING]"
 SLOT_MARKER = "[MASK]"
+FLAT_MISSING_TEXT = "missing"
 
 
 @dataclass(frozen=True)
@@ -190,6 +191,17 @@ def _format_node_for_query(node: SpanNode) -> str:
     return f"{label_token} {node.text}".strip()
 
 
+def _flat_label_name(label: str) -> str:
+    return str(label).strip().lower()
+
+
+def _format_node_for_flat_query(node: SpanNode) -> str:
+    label_name = _flat_label_name(node.label)
+    if node.is_implicit:
+        return f"implicit {label_name}"
+    return f"{label_name}: {node.text}".strip()
+
+
 def _format_step_block(
     *,
     conclusion_node: SpanNode,
@@ -230,6 +242,47 @@ def _format_step_block(
         lines.append(f"[PREMISE] {SLOT_MARKER}")
 
     lines.append("[/STEP]")
+    return "\n".join(lines)
+
+
+def _format_flat_step_block(
+    *,
+    conclusion_node: SpanNode,
+    premise_nodes_in_order: Sequence[SpanNode],
+    excluded_node_ids: Set[str],
+    missing_node_ids: Set[str],
+    slot_location: Optional[str],
+    slot_text: str,
+) -> str:
+    lines: List[str] = []
+    conclusion_is_hidden = conclusion_node.node_id in excluded_node_ids
+    conclusion_is_slot = slot_location == "conclusion" and conclusion_node.node_id in missing_node_ids
+    if conclusion_is_slot:
+        lines.append(f"conclusion: {slot_text}")
+    elif conclusion_is_hidden:
+        lines.append(f"conclusion: {FLAT_MISSING_TEXT}")
+    else:
+        lines.append(f"conclusion: {_format_node_for_flat_query(conclusion_node)}")
+
+    slot_inserted = False
+    missing_placeholder_inserted = False
+    for premise_node in premise_nodes_in_order:
+        premise_is_missing = premise_node.node_id in missing_node_ids
+        if premise_is_missing:
+            if slot_location == "premise" and not slot_inserted:
+                lines.append(f"premise: {slot_text}")
+                slot_inserted = True
+                missing_placeholder_inserted = True
+            elif not missing_placeholder_inserted:
+                lines.append(f"premise: {FLAT_MISSING_TEXT}")
+                missing_placeholder_inserted = True
+            continue
+        if premise_node.node_id in excluded_node_ids:
+            continue
+        lines.append(f"premise: {_format_node_for_flat_query(premise_node)}")
+
+    if slot_location == "premise" and not slot_inserted:
+        lines.append(f"premise: {slot_text}")
     return "\n".join(lines)
 
 
@@ -385,6 +438,83 @@ def _build_query_text(
     return "\n".join([p for p in parts if p])
 
 
+def _build_flat_query_text(
+    *,
+    case_graph: CaseGraph,
+    motion_root_id: str,
+    target_conclusion_id: str,
+    excluded_node_ids: Set[str],
+    missing_node_ids: Set[str],
+    focus_slot_location: str,
+    slot_text: str,
+) -> str:
+    motion_node_ids = _collect_motion_node_ids(
+        root_conclusion_id=motion_root_id,
+        premise_ids_by_conclusion_id=case_graph.premise_ids_by_conclusion_id,
+    )
+    derived_conclusion_ids = _derive_step_conclusion_ids_for_motion(case_graph, motion_node_ids)
+
+    depths = _topological_depths(
+        node_ids=motion_node_ids,
+        conclusion_ids_by_premise_id=case_graph.conclusion_ids_by_premise_id,
+        premise_ids_by_conclusion_id=case_graph.premise_ids_by_conclusion_id,
+    )
+
+    def _step_order_key(conclusion_id: str) -> Tuple[int, int, str]:
+        node = case_graph.nodes_by_id[conclusion_id]
+        depth = depths.get(conclusion_id, 0) if depths is not None else 0
+        start_key = node.start if node.start is not None else 10**18
+        return (depth, start_key, conclusion_id)
+
+    ordered_step_conclusion_ids = sorted(derived_conclusion_ids, key=_step_order_key)
+
+    context_blocks: List[str] = []
+    for conclusion_id in ordered_step_conclusion_ids:
+        conclusion_node = case_graph.nodes_by_id[conclusion_id]
+        premise_nodes = _ordered_premise_nodes_for_conclusion(
+            case_graph, conclusion_id=conclusion_id, motion_node_ids=motion_node_ids
+        )
+        step_text = _format_flat_step_block(
+            conclusion_node=conclusion_node,
+            premise_nodes_in_order=premise_nodes,
+            excluded_node_ids=excluded_node_ids,
+            missing_node_ids=missing_node_ids,
+            slot_location=None,
+            slot_text=slot_text,
+        )
+        if step_text:
+            context_blocks.append(step_text)
+
+    focus_conclusion_node = case_graph.nodes_by_id[target_conclusion_id]
+    focus_premise_nodes = _ordered_premise_nodes_for_conclusion(
+        case_graph, conclusion_id=target_conclusion_id, motion_node_ids=motion_node_ids
+    )
+    focus_block = _format_flat_step_block(
+        conclusion_node=focus_conclusion_node,
+        premise_nodes_in_order=focus_premise_nodes,
+        excluded_node_ids=excluded_node_ids,
+        missing_node_ids=missing_node_ids,
+        slot_location=focus_slot_location,
+        slot_text=slot_text,
+    )
+
+    root_node = case_graph.nodes_by_id[motion_root_id]
+    root_is_hidden = motion_root_id in excluded_node_ids
+    root_line = f"root: {FLAT_MISSING_TEXT}" if root_is_hidden else f"root: {_format_node_for_flat_query(root_node)}"
+
+    parts = [
+        "argument",
+        root_line,
+        "",
+        "context",
+        "\n\n".join(block.strip() for block in context_blocks if block.strip()).strip(),
+        "",
+        "focus",
+        focus_block.strip(),
+    ]
+    return "\n".join(part for part in parts if part is not None).strip()
+
+
 def _contiguous_label_blocks(nodes_in_order: Sequence[SpanNode]) -> List[List[SpanNode]]:
     blocks: List[List[SpanNode]] = []
     for node in nodes_in_order:
@@ -475,6 +605,31 @@ def _build_queries_for_case(
                 if query_text.count(SLOT_MARKER) != 1:
                     continue
 
+                flat_query_text_plain = _build_flat_query_text(
+                    case_graph=case_graph,
+                    motion_root_id=motion_root_id,
+                    target_conclusion_id=target_conclusion_id,
+                    excluded_node_ids=excluded_node_ids,
+                    missing_node_ids=missing_node_ids,
+                    focus_slot_location="premise",
+                    slot_text="missing span",
+                )
+                flat_query_text_masked = _build_flat_query_text(
+                    case_graph=case_graph,
+                    motion_root_id=motion_root_id,
+                    target_conclusion_id=target_conclusion_id,
+                    excluded_node_ids=excluded_node_ids,
+                    missing_node_ids=missing_node_ids,
+                    focus_slot_location="premise",
+                    slot_text=SLOT_MARKER,
+                )
+                if SLOT_MARKER in flat_query_text_plain:
+                    raise ValueError(f"flat_query_text_plain unexpectedly contains {SLOT_MARKER}: {query_id}")
+                if flat_query_text_masked.count(SLOT_MARKER) != 1:
+                    raise ValueError(
+                        f"flat_query_text_masked must contain exactly one {SLOT_MARKER}: {query_id}"
+                    )
+
                 queries.append(
                     {
                         "query_id": query_id,
@@ -482,6 +637,8 @@ def _build_queries_for_case(
                         "motion_root_id": motion_root_id,
                         "mask_parent_id": target_conclusion_id,
                         "query_text": query_text,
+                        "flat_query_text_plain": flat_query_text_plain,
+                        "flat_query_text_masked": flat_query_text_masked,
                         "positive_passage_ids": positive_passage_ids,
                         "positive_labels": positive_labels,
                     }
@@ -518,6 +675,31 @@ def _build_queries_for_case(
         if query_text.count(SLOT_MARKER) != 1:
             continue
 
+        flat_query_text_plain = _build_flat_query_text(
+            case_graph=case_graph,
+            motion_root_id=motion_root_id,
+            target_conclusion_id=motion_root_id,
+            excluded_node_ids=excluded_node_ids,
+            missing_node_ids=missing_node_ids,
+            focus_slot_location="conclusion",
+            slot_text="missing span",
+        )
+        flat_query_text_masked = _build_flat_query_text(
+            case_graph=case_graph,
+            motion_root_id=motion_root_id,
+            target_conclusion_id=motion_root_id,
+            excluded_node_ids=excluded_node_ids,
+            missing_node_ids=missing_node_ids,
+            focus_slot_location="conclusion",
+            slot_text=SLOT_MARKER,
+        )
+        if SLOT_MARKER in flat_query_text_plain:
+            raise ValueError(f"flat_query_text_plain unexpectedly contains {SLOT_MARKER}: {query_id}")
+        if flat_query_text_masked.count(SLOT_MARKER) != 1:
+            raise ValueError(
+                f"flat_query_text_masked must contain exactly one {SLOT_MARKER}: {query_id}"
+            )
+
         queries.append(
             {
                 "query_id": query_id,
@@ -525,6 +707,8 @@ def _build_queries_for_case(
                 "motion_root_id": motion_root_id,
                 "mask_parent_id": motion_root_id,
                 "query_text": query_text,
+                "flat_query_text_plain": flat_query_text_plain,
+                "flat_query_text_masked": flat_query_text_masked,
                 "positive_passage_ids": positive_passage_ids,
                 "positive_labels": [LABEL_CONCLUSION],
             }

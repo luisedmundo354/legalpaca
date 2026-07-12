@@ -164,6 +164,8 @@ class MultiPositiveContrastiveTrainer(Trainer):
             query_batch_size=self.retrieval_eval_config.query_batch_size,
             passage_batch_size=self.retrieval_eval_config.passage_batch_size,
             ks=self.retrieval_eval_config.ks,
+            query_view=self.retrieval_eval_config.query_view,
+            regime_name=self.retrieval_eval_config.regime_name,
         )
 
         retrieval_metrics = dict(retrieval_result.metrics)
@@ -186,6 +188,8 @@ class RetrievalEvalConfig:
     query_batch_size: int
     passage_batch_size: int
     ks: Sequence[int] = (1, 5, 10, 20)
+    query_view: str = "structured"
+    regime_name: str = "same_case_legacy"
 
 
 class SetEpochCallback(TrainerCallback):

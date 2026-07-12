@@ -43,7 +43,11 @@ One line per retrievable candidate span (implicit nodes are excluded):
 
 ### `processed/queries/{train,val,test}.jsonl`
 
-One line per query; each query has **1+ positives** and contains exactly one `[SLOT]`:
+One line per query; each query has **1+ positives** and includes:
+
+- `query_text`: structured/tree query with exactly one `[MASK]`
+- `flat_query_text_plain`: flat/raw query with the same visible content and no `[MASK]`
+- `flat_query_text_masked`: flat/raw query with the same visible content and exactly one `[MASK]`
 
 ```json
 {
@@ -51,7 +55,9 @@ One line per query; each query has **1+ positives** and contains exactly one `[S
   "doc_id": "36",
   "motion_root_id": "...",
   "mask_parent_id": "...",
-  "query_text": "[ARG] ... [PREMISE] [SLOT] ... [/ARG]",
+  "query_text": "[ARG] ... [PREMISE] [MASK] ... [/ARG]",
+  "flat_query_text_plain": "argument ... premise: missing span ...",
+  "flat_query_text_masked": "argument ... premise: [MASK] ...",
   "positive_passage_ids": ["36::Wl3tM3NLW3", "36::7qmRQq-4Nt"],
   "positive_labels": ["Rule", "Analysis"]
 }
@@ -77,7 +83,7 @@ Doc-id splits (split-by-case to prevent leakage).
 ## Markup tokens used
 
 - Structure: `[ARG]`, `[/ARG]`, `[TREE]`, `[/TREE]`, `[FOCUS]`, `[/FOCUS]`, `[STEP]`, `[/STEP]`, `[CONCL]`, `[PREMISE]`
-- Slot marker: `[SLOT]` (exactly one per query)
+- Slot marker: `[MASK]` (exactly one per structured query and exactly one per `flat_query_text_masked`)
 - Hidden/masked non-slot nodes: `[MISSING]` (may appear multiple times in `[TREE]` to preserve structure without leaking labels/text)
 - Labels: `[RULE]`, `[ANALYSIS]`, `[CONCLUSION]` (and optionally `[BACKGROUND]`, `[PROCEDURE]`)
 - Implicit nodes: represented in queries as `[IMPLICIT] [LABEL]` and excluded from `corpus.jsonl`

@@ -13,9 +13,17 @@ import torch
 from safetensors.torch import load_file
 from transformers import AutoConfig, AutoModel, AutoTokenizer
 
-from retriever.data import load_candidates_by_case, load_corpus, load_queries
+from retriever.data import load_candidates_by_case, load_corpus, load_queries, load_split_doc_ids
 from retriever.markup import SLOT_TOKEN
 from retriever.models import DualEncoderRetriever
+from retriever.query_views import QUERY_VIEW_STRUCTURED, select_query_text
+from retriever.regimes import (
+    REGIME_GLOBAL_SPLIT,
+    REGIME_SAME_CASE_FULL,
+    REGIME_SAME_CASE_LEGACY,
+    build_candidate_ids_by_query,
+    build_split_passage_ids,
+)
 
 from .artifact import ModelArtifactRef, cleanup_model_artifact, resolve_model_artifact
 from .metrics import QueryInfo, aggregate_metrics, compute_bucketed_metrics, compute_query_metrics
@@ -201,6 +209,8 @@ def run_eval(
     passage_batch_size: int,
     ks: Sequence[int],
     random_seed: int,
+    query_view: str,
+    regimes: Sequence[str],
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     runs_dir = output_dir / "runs"
@@ -209,8 +219,12 @@ def run_eval(
     corpus_by_passage_id = load_corpus(processed_dir)
     candidates_by_case = load_candidates_by_case(processed_dir)
     queries = load_queries(processed_dir, split)
+    split_doc_ids = load_split_doc_ids(processed_dir, split)
 
-    passage_ids = list(corpus_by_passage_id.keys())
+    passage_ids = build_split_passage_ids(
+        corpus_by_passage_id=corpus_by_passage_id,
+        split_doc_ids=split_doc_ids,
+    )
     passage_texts = [corpus_by_passage_id[pid].text for pid in passage_ids]
     passage_labels = {pid: corpus_by_passage_id[pid].label for pid in passage_ids}
     passage_text_by_id = {pid: corpus_by_passage_id[pid].text for pid in passage_ids}
@@ -241,7 +255,7 @@ def run_eval(
     query_vecs = encode_queries(
         retriever,
         tokenizer,
-        [q.query_text for q in queries],
+        [select_query_text(q, query_view=query_view) for q in queries],
         batch_size=query_batch_size,
         max_len_query=max_len_query,
         device=device,
@@ -250,18 +264,20 @@ def run_eval(
     scores = query_vecs @ passage_vecs.T
 
     max_k = int(max(ks))
-    regimes: List[EvalRegime] = []
-
-    positive_ids_by_doc_id: Dict[str, set[str]] = {}
-    for q in queries:
-        positive_ids_by_doc_id.setdefault(q.doc_id, set()).update(q.positive_passage_ids)
-
-    same_doc_filtered: List[List[str]] = []
-    for q in queries:
-        excluded_ids = positive_ids_by_doc_id.get(q.doc_id, set()) - set(q.positive_passage_ids)
-        doc_candidates = candidates_by_case.get(q.doc_id, [])
-        same_doc_filtered.append([pid for pid in doc_candidates if pid not in excluded_ids])
-    regimes.append(EvalRegime(name="same_doc_filtered", candidate_ids_by_query_idx=same_doc_filtered))
+    eval_regimes: List[EvalRegime] = []
+    for regime_name in regimes:
+        eval_regimes.append(
+            EvalRegime(
+                name=str(regime_name),
+                candidate_ids_by_query_idx=build_candidate_ids_by_query(
+                    queries=queries,
+                    corpus_by_passage_id=corpus_by_passage_id,
+                    candidates_by_case=candidates_by_case,
+                    split_doc_ids=split_doc_ids,
+                    regime_name=regime_name,
+                ),
+            )
+        )
 
     results: Dict[str, Any] = {
         "config": {
@@ -274,6 +290,7 @@ def run_eval(
                 "corpus.jsonl": _sha256_file(processed_dir / "corpus.jsonl"),
                 f"queries/{split}.jsonl": _sha256_file(processed_dir / "queries" / f"{split}.jsonl"),
                 "pools/candidates_by_case.json": _sha256_file(processed_dir / "pools" / "candidates_by_case.json"),
+                f"splits/{split}_cases.txt": _sha256_file(processed_dir / "splits" / f"{split}_cases.txt"),
             },
             "max_len_query": int(max_len_query),
             "max_len_passage": int(max_len_passage),
@@ -281,6 +298,8 @@ def run_eval(
             "passage_batch_size": int(passage_batch_size),
             "k_values": [int(k) for k in ks],
             "random_seed": int(random_seed),
+            "query_view": str(query_view),
+            "regimes": [str(x) for x in regimes],
             "device": str(device),
         },
         "regimes": {},
@@ -288,7 +307,7 @@ def run_eval(
 
     examples_path = runs_dir / "topk_examples.jsonl"
     with examples_path.open("w", encoding="utf-8") as examples_f:
-        for regime in regimes:
+        for regime in eval_regimes:
             candidate_ids_by_query = regime.candidate_ids_by_query_idx
 
             model_per_query_rows: List[Dict[str, float]] = []
@@ -444,6 +463,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--passage_batch_size", type=int, default=256)
     parser.add_argument("--k_values", type=str, default="1,5,10,20,50")
     parser.add_argument("--random_seed", type=int, default=17)
+    parser.add_argument("--query_view", type=str, default=QUERY_VIEW_STRUCTURED)
+    parser.add_argument(
+        "--regimes",
+        type=str,
+        default="same_case_legacy,same_case_full,global_split",
+    )
 
     return parser.parse_args()
 
@@ -457,6 +482,7 @@ def main() -> None:
         output_dir = processed_dir.parent / "eval_runs" / time.strftime("%Y%m%d_%H%M%S")
 
     ks = tuple(int(x.strip()) for x in str(args.k_values).split(",") if x.strip())
+    regimes = tuple(str(x.strip()) for x in str(args.regimes).split(",") if x.strip())
 
     model_artifact = resolve_model_artifact(
         model_dir=args.model_dir,
@@ -475,6 +501,8 @@ def main() -> None:
             passage_batch_size=args.passage_batch_size,
             ks=ks,
             random_seed=args.random_seed,
+            query_view=str(args.query_view),
+            regimes=regimes,
         )
     finally:
         cleanup_model_artifact(model_artifact)

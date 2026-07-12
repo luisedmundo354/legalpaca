@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Sequence
 
+from .query_views import QUERY_VIEW_STRUCTURED, select_query_text
+
 from torch.utils.data import Dataset
 
 
@@ -26,6 +28,8 @@ class QueryExample:
     query_text: str
     positive_passage_ids: List[str]
     positive_labels: List[str]
+    flat_query_text_plain: str = ""
+    flat_query_text_masked: str = ""
 
 
 def load_corpus(processed_dir: Path) -> Dict[str, CorpusPassage]:
@@ -59,9 +63,17 @@ def load_queries(processed_dir: Path, split: str) -> List[QueryExample]:
                     query_text=str(rec["query_text"]),
                     positive_passage_ids=[str(x) for x in rec.get("positive_passage_ids") or []],
                     positive_labels=[str(x) for x in rec.get("positive_labels") or []],
+                    flat_query_text_plain=str(rec.get("flat_query_text_plain") or ""),
+                    flat_query_text_masked=str(rec.get("flat_query_text_masked") or ""),
                 )
             )
     return queries
+
+
+def load_split_doc_ids(processed_dir: Path, split: str) -> List[str]:
+    split_path = processed_dir / "splits" / f"{split}_cases.txt"
+    with split_path.open("r", encoding="utf-8") as f:
+        return [line.strip() for line in f if line.strip()]
 
 
 def load_candidates_by_case(processed_dir: Path) -> Dict[str, List[str]]:
@@ -94,6 +106,7 @@ class MultiPositiveRetrievalTrainDataset(Dataset):
         max_pos_per_query: int,
         num_same_case_negatives: int,
         num_distractor_negatives: int,
+        query_view: str = QUERY_VIEW_STRUCTURED,
     ):
         self.queries = list(queries)
         self.candidates_by_case = candidates_by_case
@@ -114,6 +127,7 @@ class MultiPositiveRetrievalTrainDataset(Dataset):
         self.max_pos_per_query = int(max_pos_per_query)
         self.num_same_case_negatives = int(num_same_case_negatives)
         self.num_distractor_negatives = int(num_distractor_negatives)
+        self.query_view = str(query_view)
         self.use_all_same_case_candidates = self.num_same_case_negatives < 0
         self.max_candidates_per_case = max((len(v) for v in candidates_by_case.values()), default=0)
 
@@ -206,7 +220,7 @@ class MultiPositiveRetrievalTrainDataset(Dataset):
         return {
             "query_id": query.query_id,
             "doc_id": query.doc_id,
-            "query_text": query.query_text,
+            "query_text": select_query_text(query, query_view=self.query_view),
             "positive_passage_ids": positive_passage_ids,
             "candidate_passage_ids": candidate_passage_ids,
         }

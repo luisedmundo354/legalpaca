@@ -23,6 +23,9 @@ Key behavior:
 - Passage embedding = mean pooling over non-padding tokens (excluding position 0).
 - Negatives = all same-case candidates (padded to max case size) + cross-case negatives (default 32, label-filtered).
 - Validation logs both **contrastive loss** (`eval_loss`) and **retrieval metrics** (e.g. `eval_recall_at_20`).
+- `--query_view` supports:
+  - `structured`: existing tree/markup query
+  - `flat_masked`: flat/raw query with the same content and one `[MASK]`
 
 SageMaker notebook template:
 
@@ -54,6 +57,12 @@ Outputs:
 Notes:
 
 - `--model_s3_uri` requires AWS credentials and either `boto3` or the `aws` CLI available in your environment.
+- The SageMaker processing entrypoint `processing_eval/run_eval_sm.py` now supports multi-system, multi-regime ablations including:
+  - `bm25_flat`
+  - `dense_open_flat`
+  - `base_modernbert_flat`
+  - `fine_tuned_flat`
+  - `fine_tuned_structured`
 
 ## Gradient accumulation
 

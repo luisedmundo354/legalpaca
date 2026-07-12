@@ -7,7 +7,9 @@ from typing import Dict, Iterable, List, Sequence
 import torch
 from transformers import PreTrainedTokenizerBase
 
-from .data import load_candidates_by_case, load_corpus, load_queries
+from .data import load_candidates_by_case, load_corpus, load_queries, load_split_doc_ids
+from .query_views import QUERY_VIEW_STRUCTURED, select_query_text
+from .regimes import REGIME_SAME_CASE_LEGACY, build_candidate_ids_by_query, build_split_passage_ids
 
 
 @dataclass(frozen=True)
@@ -95,21 +97,30 @@ def evaluate_retrieval(
     query_batch_size: int,
     passage_batch_size: int,
     ks: Sequence[int] = (1, 5, 10, 20, 50),
+    query_view: str = QUERY_VIEW_STRUCTURED,
+    regime_name: str = REGIME_SAME_CASE_LEGACY,
 ) -> RetrievalEvalResult:
     corpus_by_passage_id = load_corpus(processed_dir)
     candidates_by_case = load_candidates_by_case(processed_dir)
     queries = load_queries(processed_dir, split)
+    split_doc_ids = load_split_doc_ids(processed_dir, split)
 
-    passage_ids = list(corpus_by_passage_id.keys())
+    passage_ids = build_split_passage_ids(
+        corpus_by_passage_id=corpus_by_passage_id,
+        split_doc_ids=split_doc_ids,
+    )
     passage_texts = [corpus_by_passage_id[pid].text for pid in passage_ids]
     passage_index_by_id = {pid: i for i, pid in enumerate(passage_ids)}
 
     query_ids = [q.query_id for q in queries]
-    query_texts = [q.query_text for q in queries]
-
-    positive_ids_by_doc_id: Dict[str, set[str]] = {}
-    for q in queries:
-        positive_ids_by_doc_id.setdefault(q.doc_id, set()).update(q.positive_passage_ids)
+    query_texts = [select_query_text(q, query_view=query_view) for q in queries]
+    candidate_ids_by_query = build_candidate_ids_by_query(
+        queries=queries,
+        corpus_by_passage_id=corpus_by_passage_id,
+        candidates_by_case=candidates_by_case,
+        split_doc_ids=split_doc_ids,
+        regime_name=regime_name,
+    )
 
     device = next(retriever.parameters()).device
     retriever.eval()
@@ -137,11 +148,7 @@ def evaluate_retrieval(
     candidate_sizes: List[int] = []
     retrieval_losses: List[float] = []
     for qi, query in enumerate(queries):
-        doc_candidate_ids = candidates_by_case.get(query.doc_id, [])
-        excluded_ids = positive_ids_by_doc_id.get(query.doc_id, set()) - set(query.positive_passage_ids)
-        candidate_ids = [
-            pid for pid in doc_candidate_ids if (pid in passage_index_by_id) and (pid not in excluded_ids)
-        ]
+        candidate_ids = [pid for pid in candidate_ids_by_query[qi] if pid in passage_index_by_id]
         candidate_indices = [passage_index_by_id[pid] for pid in candidate_ids]
         if not candidate_indices:
             continue

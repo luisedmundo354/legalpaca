@@ -22,6 +22,7 @@ from retriever.data import (
 )
 from retriever.markup import SLOT_TOKEN, all_markup_tokens
 from retriever.models import DualEncoderRetriever
+from retriever.query_views import QUERY_VIEW_FLAT_MASKED, QUERY_VIEW_STRUCTURED, normalize_query_view
 from trainer import MultiPositiveContrastiveTrainer, RetrievalEvalConfig, SetEpochCallback
 
 
@@ -89,6 +90,13 @@ def parse_args() -> Tuple[argparse.Namespace, List[str]]:
 
     parser.add_argument("--max_pos_per_query", type=int, default=2)
     parser.add_argument(
+        "--query_view",
+        type=str,
+        default=QUERY_VIEW_STRUCTURED,
+        choices=[QUERY_VIEW_STRUCTURED, QUERY_VIEW_FLAT_MASKED],
+        help="Select structured/tree queries or flat masked queries.",
+    )
+    parser.add_argument(
         "--num_same_case_negatives",
         type=int,
         default=-1,
@@ -127,6 +135,7 @@ def parse_args() -> Tuple[argparse.Namespace, List[str]]:
 
 def main() -> None:
     args, _unknown = parse_args()
+    query_view = normalize_query_view(args.query_view)
 
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
     os.environ.setdefault("HF_HOME", "/tmp/huggingface")
@@ -198,6 +207,7 @@ def main() -> None:
         max_pos_per_query=args.max_pos_per_query,
         num_same_case_negatives=args.num_same_case_negatives,
         num_distractor_negatives=args.num_distractor_negatives,
+        query_view=query_view,
     )
     val_dataset = MultiPositiveRetrievalTrainDataset(
         val_queries,
@@ -207,6 +217,7 @@ def main() -> None:
         max_pos_per_query=args.max_pos_per_query,
         num_same_case_negatives=args.num_same_case_negatives,
         num_distractor_negatives=args.num_distractor_negatives,
+        query_view=query_view,
     )
 
     collator = RetrievalBatchCollator(
@@ -250,6 +261,7 @@ def main() -> None:
         query_batch_size=int(args.eval_query_batch_size),
         passage_batch_size=int(args.eval_passage_batch_size),
         ks=tuple(int(x) for x in _parse_csv(args.eval_ks)),
+        query_view=query_view,
     )
 
     trainer = MultiPositiveContrastiveTrainer(
@@ -297,6 +309,7 @@ def main() -> None:
             "base_model_name_or_path": args.model_name_or_path,
             "slot_token": SLOT_TOKEN,
             "temperature": float(args.temperature),
+            "training_query_view": query_view,
             "weight_file": "model.safetensors",
             "markup_tokens": all_markup_tokens(),
         }
