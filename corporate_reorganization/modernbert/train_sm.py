@@ -13,13 +13,8 @@ from transformers import AutoConfig, AutoModel, AutoTokenizer, TrainingArguments
 from transformers.integrations.deepspeed import unset_hf_deepspeed_config
 
 from retriever.collator import RetrievalBatchCollator
-from retriever.data import (
-    MultiPositiveRetrievalTrainDataset,
-    load_candidates_by_case,
-    load_corpus,
-    load_queries,
-    select_distractor_passage_ids,
-)
+from retriever.data import load_candidates_by_case, load_corpus, load_queries
+from retriever.legacy_sampling import MultiPositiveRetrievalTrainDataset, select_distractor_passage_ids
 from retriever.markup import SLOT_TOKEN, all_markup_tokens
 from retriever.models import DualEncoderRetriever
 from retriever.query_views import QUERY_VIEW_FLAT_MASKED, QUERY_VIEW_STRUCTURED, normalize_query_view

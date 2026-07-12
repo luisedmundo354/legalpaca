@@ -42,6 +42,34 @@ the remaining three folds are training. Every case is test once, validation
 once, and training three times. Each controlled run trains on 294 queries from
 24--26 cases.
 
+## Controlled sampling
+
+The controlled experiment uses two strict samplers. `local_unique` draws 40
+unique same-case negatives and 20 unique other-case negatives. Its other-case
+draw is passage-uniform over the union of eligible passages in every other
+training case; it is not a case-uniform or two-stage draw. `global_uniform`
+draws 60 unique negatives passage-uniformly from all training-case passages,
+including the query's case.
+
+Both samplers exclude only every gold passage of the current query. Golds of
+other queries and visible context remain eligible. A query contributes all of
+its golds when it has at most four, or a uniform subset of four when it has
+more. Positive selection is matched across sampler and query-view conditions.
+There is no replacement, padding, or compensation for fewer than four golds:
+every example has exactly 60 negatives and therefore 61--64 candidates.
+
+Selection ranks passages by a versioned SHA-256 digest keyed by experiment
+seed, epoch, query ID, sampling component, and passage ID. Each sampled example
+emits its selected strata and a checksum over the canonical trace payload.
+Pool insufficiency, duplicate IDs, incomplete case pools, or invalid golds are
+fatal errors.
+
+The reconstructed March sampler remains isolated in
+`retriever/legacy_sampling.py`. It intentionally retains the historical
+case-wide gold exclusion, 56+4 Background-Facts configuration, replacement
+paths, negative compensation, and query-index-based Python RNG behavior. It is
+not used by the controlled comparison.
+
 ## Files
 
 - configs/folds.json is the immutable generated fold manifest. It records
@@ -62,3 +90,4 @@ Validate the frozen manifest directly:
 Run the focused tests:
 
     PYTHONDONTWRITEBYTECODE=1 python -m unittest -v corporate_reorganization.modernbert.tests.test_retrieval_cv_folds
+    PYTHONDONTWRITEBYTECODE=1 python -m unittest -v corporate_reorganization.modernbert.tests.test_retrieval_sampling
