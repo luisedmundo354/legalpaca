@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, Mapping, Optional, Sequence
 
 import torch
 import torch.distributed as dist
@@ -12,8 +12,16 @@ from transformers import Trainer, TrainerCallback, TrainerControl, TrainerState
 from accelerate.utils import DistributedType
 
 from retriever.batching import GlobalQueryBatchSampler, SentinelQueryDataset
+from retriever.data import PassageIndexTable
+from retriever.distributed import build_global_candidate_plan, gather_owned_embeddings
 from retriever.eval import evaluate_retrieval
-from retriever.losses import build_positive_mask, multi_positive_nce_loss, multi_positive_nce_loss_sum
+from retriever.losses import (
+    build_index_positive_mask,
+    build_positive_mask,
+    masked_multi_positive_nce_loss_sum,
+    multi_positive_nce_loss,
+)
+from retriever.traces import CandidateTraceStore
 
 
 class MultiPositiveContrastiveTrainer(Trainer):
@@ -193,10 +201,28 @@ class ControlledRetrievalTrainer(MultiPositiveContrastiveTrainer):
     EXPECTED_UPDATES_PER_EPOCH = 3
     EXPECTED_TOTAL_UPDATES = 60
 
-    def __init__(self, *args: Any, experiment_seed: int, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *args: Any,
+        experiment_seed: int,
+        passage_index_table: PassageIndexTable,
+        max_len_passage: int,
+        **kwargs: Any,
+    ) -> None:
         if type(experiment_seed) is not int or experiment_seed < 0:
             raise ValueError("experiment_seed must be a non-negative exact int")
+        if not isinstance(passage_index_table, PassageIndexTable):
+            raise TypeError("passage_index_table must be a PassageIndexTable")
+        if len(passage_index_table) != 5_286:
+            raise RuntimeError(
+                f"Controlled corpus passage index must contain exactly 5,286 rows; "
+                f"got {len(passage_index_table)}"
+            )
+        if type(max_len_passage) is not int or max_len_passage != 500:
+            raise RuntimeError("Controlled max passage length must be the frozen exact value 500")
         self.experiment_seed = experiment_seed
+        self.passage_index_table = passage_index_table
+        self.max_len_passage = max_len_passage
         self._global_batch_sampler: GlobalQueryBatchSampler | None = None
         self._window_epoch: int | None = None
         self._window_index = 0
@@ -222,6 +248,14 @@ class ControlledRetrievalTrainer(MultiPositiveContrastiveTrainer):
                 "Transformers 4.49 must detect the retriever loss-kwargs contract; "
                 "the controlled training_step relies on its no-extra-GAS-division path"
             )
+        if self.processing_class is None:
+            raise RuntimeError("Controlled retrieval requires an explicit local tokenizer")
+        self._candidate_trace_store = CandidateTraceStore(
+            Path(self.args.output_dir),
+            passage_index_table=self.passage_index_table,
+            rank=self.accelerator.process_index,
+            world_size=self.accelerator.num_processes,
+        )
 
     def get_train_dataloader(self) -> DataLoader:
         if self.train_dataset is None:
@@ -268,6 +302,69 @@ class ControlledRetrievalTrainer(MultiPositiveContrastiveTrainer):
             )
         self._global_batch_sampler = batch_sampler
         return prepared
+
+    @staticmethod
+    def _forward_controlled_batch(
+        model,
+        *,
+        query_input_ids: torch.Tensor,
+        query_attention_mask: torch.Tensor,
+        passage_input_ids: torch.Tensor,
+        passage_attention_mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        outputs = model(
+            query_input_ids=query_input_ids,
+            query_attention_mask=query_attention_mask,
+            passage_input_ids=passage_input_ids,
+            passage_attention_mask=passage_attention_mask,
+        )
+        if type(outputs) is not dict or set(outputs) != {
+            "query_embeddings",
+            "passage_embeddings",
+        }:
+            raise TypeError(
+                "Controlled DeepSpeed forward must return exactly query_embeddings and "
+                "passage_embeddings"
+            )
+        query_embeddings = outputs["query_embeddings"]
+        passage_embeddings = outputs["passage_embeddings"]
+        if (
+            not torch.is_tensor(query_embeddings)
+            or query_embeddings.ndim != 2
+            or not torch.is_tensor(passage_embeddings)
+            or passage_embeddings.ndim != 2
+            or query_embeddings.shape[1] != passage_embeddings.shape[1]
+        ):
+            raise TypeError("Controlled DeepSpeed forward returned invalid embedding tensors")
+        return query_embeddings, passage_embeddings
+
+    @staticmethod
+    def _tokenize_owned_passages(
+        tokenizer,
+        passage_texts: list[str],
+        *,
+        max_len_passage: int,
+    ) -> Mapping[str, torch.Tensor]:
+        original_truncation_side = tokenizer.truncation_side
+        tokenizer.truncation_side = "right"
+        try:
+            tokens = tokenizer(
+                passage_texts,
+                truncation=True,
+                max_length=max_len_passage,
+                padding=True,
+                return_tensors="pt",
+            )
+        finally:
+            tokenizer.truncation_side = original_truncation_side
+        if (
+            not isinstance(tokens, Mapping)
+            or not torch.is_tensor(tokens.get("input_ids"))
+            or not torch.is_tensor(tokens.get("attention_mask"))
+            or tokens["input_ids"].shape != tokens["attention_mask"].shape
+        ):
+            raise TypeError("Passage tokenizer returned invalid input tensors")
+        return tokens
 
     def set_initial_training_values(self, args, dataloader, total_train_batch_size: int):
         if args.max_steps >= 0:
@@ -381,45 +478,86 @@ class ControlledRetrievalTrainer(MultiPositiveContrastiveTrainer):
         device = next(retriever.parameters()).device
         query_input_ids = inputs["query_input_ids"].to(device)
         query_attention_mask = inputs["query_attention_mask"].to(device)
-        passage_input_ids = inputs["passage_input_ids"].to(device)
-        passage_attention_mask = inputs["passage_attention_mask"].to(device)
-        passage_id_hashes = inputs["passage_id_hashes"].to(device)
-        positive_id_hashes = inputs["positive_id_hashes"].to(device)
+        candidate_passage_indices = inputs["candidate_passage_indices"].to(device)
+        positive_passage_indices = inputs["positive_passage_indices"].to(device)
 
         local_valid_count = self._exact_scalar_count(inputs)
-        if query_input_ids.shape[0] != local_valid_count:
+        if (
+            query_input_ids.ndim != 2
+            or query_attention_mask.shape != query_input_ids.shape
+            or query_input_ids.shape[0] != local_valid_count
+        ):
             raise RuntimeError(
-                f"Tokenized query rows={query_input_ids.shape[0]} but "
+                "Tokenized controlled query tensors do not align with "
                 f"valid_query_count={local_valid_count}"
             )
-
-        query_embeddings = retriever.encode_queries(query_input_ids, query_attention_mask)
-        passage_embeddings = retriever.encode_passages(passage_input_ids, passage_attention_mask)
-
+        if (
+            candidate_passage_indices.dtype != torch.long
+            or candidate_passage_indices.ndim != 2
+            or candidate_passage_indices.shape[0] != local_valid_count
+            or positive_passage_indices.dtype != torch.long
+            or positive_passage_indices.ndim != 2
+            or positive_passage_indices.shape[0] != local_valid_count
+        ):
+            raise RuntimeError("Controlled candidate/positive index rows do not align with queries")
         if (
             not dist.is_available()
             or not dist.is_initialized()
             or dist.get_world_size() != self.EXPECTED_WORLD_SIZE
         ):
             raise RuntimeError("Controlled loss requires the initialized four-rank distributed group")
-        gathered_passage_embeddings = [
-            torch.zeros_like(passage_embeddings) for _ in range(self.EXPECTED_WORLD_SIZE)
-        ]
-        dist.all_gather(gathered_passage_embeddings, passage_embeddings)
-        gathered_passage_embeddings[dist.get_rank()] = passage_embeddings
-        passage_embeddings_all = torch.cat(gathered_passage_embeddings, dim=0)
 
-        gathered_passage_hashes = [
-            torch.zeros_like(passage_id_hashes) for _ in range(self.EXPECTED_WORLD_SIZE)
+        candidate_plan = build_global_candidate_plan(
+            candidate_passage_indices,
+            corpus_size=len(self.passage_index_table),
+        )
+        if candidate_plan.local_owned_indices.numel() < 1:
+            raise RuntimeError(
+                "Controlled production microbatch assigned no real passage to this rank"
+            )
+        owned_passage_texts = [
+            self.passage_index_table.text_for_index(int(passage_index))
+            for passage_index in candidate_plan.local_owned_indices.detach().cpu().tolist()
         ]
-        dist.all_gather(gathered_passage_hashes, passage_id_hashes)
-        passage_id_hashes_all = torch.cat(gathered_passage_hashes, dim=0)
+        tokenizer = self.processing_class
+        owned_passage_tokens = self._tokenize_owned_passages(
+            tokenizer,
+            owned_passage_texts,
+            max_len_passage=self.max_len_passage,
+        )
+        passage_input_ids = owned_passage_tokens["input_ids"].to(device)
+        passage_attention_mask = owned_passage_tokens["attention_mask"].to(device)
+        if passage_input_ids.shape[0] != candidate_plan.local_owned_indices.numel():
+            raise RuntimeError("Passage tokenizer changed the owned-passage row count")
+        query_embeddings, owned_passage_embeddings = self._forward_controlled_batch(
+            model,
+            query_input_ids=query_input_ids,
+            query_attention_mask=query_attention_mask,
+            passage_input_ids=passage_input_ids,
+            passage_attention_mask=passage_attention_mask,
+        )
+        if query_embeddings.shape[0] != local_valid_count:
+            raise RuntimeError("DeepSpeed forward changed the valid query row count")
+        if owned_passage_embeddings.shape[0] != candidate_plan.local_owned_indices.numel():
+            raise RuntimeError("DeepSpeed forward changed the owned passage row count")
+        passage_embeddings_all = gather_owned_embeddings(
+            owned_passage_embeddings,
+            candidate_plan,
+        )
 
         logits = (
             (query_embeddings @ passage_embeddings_all.T) / float(retriever.temperature)
         ).float()
-        positive_mask = build_positive_mask(passage_id_hashes_all, positive_id_hashes)
-        local_loss_sum, per_query_loss = multi_positive_nce_loss_sum(logits, positive_mask)
+        positive_mask = build_index_positive_mask(
+            candidate_plan.gathered_passage_indices,
+            positive_passage_indices,
+            candidate_plan.valid_passage_mask,
+        )
+        local_loss_sum, per_query_loss = masked_multi_positive_nce_loss_sum(
+            logits,
+            positive_mask,
+            candidate_plan.valid_passage_mask,
+        )
         scaled_loss = local_loss_sum * (self.EXPECTED_WORLD_SIZE / num_items_in_batch)
 
         if return_outputs:
@@ -429,6 +567,7 @@ class ControlledRetrievalTrainer(MultiPositiveContrastiveTrainer):
                 "per_query_loss": per_query_loss,
                 "local_valid_query_count": local_valid_count,
                 "global_window_valid_count": num_items_in_batch,
+                "global_unique_passage_count": candidate_plan.global_unique_indices.numel(),
             }
         return scaled_loss
 
@@ -448,14 +587,37 @@ class ControlledRetrievalTrainer(MultiPositiveContrastiveTrainer):
             )
         if not hasattr(model, "set_gradient_accumulation_boundary"):
             raise TypeError("Controlled DeepSpeed model lacks set_gradient_accumulation_boundary")
+        sampling_traces = inputs.get("sampling_traces")
+        if (
+            type(sampling_traces) is not list
+            or len(sampling_traces) != inputs["candidate_passage_indices"].shape[0]
+            or len(sampling_traces) != inputs["positive_passage_indices"].shape[0]
+        ):
+            raise RuntimeError("Controlled sampling trace rows do not align with index rows")
+        self._candidate_trace_store.record_batch(
+            sampling_traces,
+            candidate_passage_indices=inputs["candidate_passage_indices"],
+            positive_passage_indices=inputs["positive_passage_indices"],
+        )
         model.set_gradient_accumulation_boundary(marker)
+        training_inputs = dict(inputs)
+        training_inputs.pop("sampling_traces")
         loss = Trainer.training_step(
             self,
             model,
-            inputs,
+            training_inputs,
             num_items_in_batch=num_items_in_batch,
         )
         return loss.to(self.args.device)
+
+    def finalize_sampling_traces(self) -> dict[str, Any]:
+        queries = getattr(self.train_dataset, "queries", None)
+        if not isinstance(queries, list) or len(queries) != self.EXPECTED_QUERIES:
+            raise TypeError("Controlled train dataset lost its ordered query inventory")
+        return self._candidate_trace_store.finalize(
+            expected_epochs=self.EXPECTED_EPOCHS,
+            expected_query_ids=[query.query_id for query in queries],
+        )
 
 
 @dataclass(frozen=True)

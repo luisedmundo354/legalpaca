@@ -5,7 +5,7 @@ import json
 import operator
 from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
-from .data import CorpusPassage, QueryExample
+from .data import CorpusPassage, PassageIndexTable, QueryExample
 from .query_views import QUERY_VIEW_STRUCTURED, normalize_query_view, select_query_text
 
 
@@ -285,6 +285,7 @@ class ControlledRetrievalTrainDataset:
         candidates_by_case: Mapping[str, Sequence[str]],
         training_doc_ids: Sequence[str],
         *,
+        passage_index_table: PassageIndexTable,
         sampler: str,
         experiment_seed: int,
         query_view: str = QUERY_VIEW_STRUCTURED,
@@ -297,6 +298,10 @@ class ControlledRetrievalTrainDataset:
         self.experiment_seed = _require_exact_int("experiment_seed", experiment_seed, minimum=0)
         self.query_view = normalize_query_view(query_view)
         self.epoch = 0
+
+        if not isinstance(passage_index_table, PassageIndexTable):
+            raise TypeError("passage_index_table must be a PassageIndexTable")
+        self.passage_index_table = passage_index_table
 
         self.queries = list(queries)
         if not self.queries:
@@ -323,6 +328,14 @@ class ControlledRetrievalTrainDataset:
             if passage_id != passage.passage_id:
                 raise ValueError(
                     f"Corpus key {passage_id!r} does not match record passage_id={passage.passage_id!r}"
+                )
+        if set(self.passage_index_table.passage_ids) != set(self.corpus_by_passage_id):
+            raise ValueError("Passage index table does not cover exactly the controlled corpus")
+        for passage_id, passage in self.corpus_by_passage_id.items():
+            passage_index = self.passage_index_table.index_for_id(passage_id)
+            if self.passage_index_table.text_for_index(passage_index) != passage.text:
+                raise ValueError(
+                    f"Passage index table text disagrees with controlled corpus for {passage_id!r}"
                 )
 
         corpus_ids_by_doc_id: Dict[str, set[str]] = {}
@@ -513,9 +526,8 @@ class ControlledRetrievalTrainDataset:
             "query_id": query.query_id,
             "doc_id": query.doc_id,
             "query_text": select_query_text(query, query_view=self.query_view),
-            "positive_passage_ids": positives,
-            "selected_positive_passage_ids": selected_positives,
-            "candidate_passage_ids": candidate_ids,
+            "positive_passage_indices": self.passage_index_table.indices_for_ids(positives),
+            "candidate_passage_indices": self.passage_index_table.indices_for_ids(candidate_ids),
             "sampling_trace": trace,
             "sampling_trace_sha256": trace["trace_sha256"],
         }

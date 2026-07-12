@@ -44,6 +44,9 @@ EXPECTED_FOLD_MANIFEST_LOGICAL_PATH = (
 EXPECTED_FOLD_MANIFEST_SHA256 = (
     "469858f2f8e42d0b19e53ee71af690f722482120348a2fe9719b99104758e00d"
 )
+EXPECTED_PASSAGE_INDEX_SHA256 = (
+    "641b7a6f9f77d308b9b2b4b38ab2318ffdbc61af4b4ad718caf0d3ad571ec43d"
+)
 
 
 def _exact_json_equal(actual: object, expected: object) -> bool:
@@ -282,6 +285,9 @@ def _validate_experiment_config(
         "attention_implementation": "flash_attention_2",
         "base_tokenizer_size": 50_368,
         "batch_order_algorithm": "sha256_query_order_v1",
+        "candidate_trace_artifact_schema_version": 1,
+        "candidate_trace_merge_order": ["epoch", "query_id"],
+        "candidate_trace_publication": "rank_shards_rank0_atomic_manifest_commit_v1",
         "cublas_workspace_config": ":4096:8",
         "dataloader_num_workers": 0,
         "deepspeed_gradient_clipping": 1.0,
@@ -289,13 +295,21 @@ def _validate_experiment_config(
         "deterministic_flash_attention": True,
         "flash_attention_deterministic_environment": "1",
         "full_determinism_argument": False,
+        "global_candidate_deduplication": "sorted_unique_integer_index_v1",
         "markup_tokens_supplied": 19,
         "net_new_vocabulary_rows": 18,
         "optimizer_window_microbatches": [8, 8, 3],
         "optimizer_window_valid_queries": [128, 128, 38],
+        "passage_embedding_gather": "torch_distributed_nn_autograd_all_gather_padded_v1",
+        "passage_index_order": "lexicographic_passage_id_v1",
+        "passage_index_schema_version": 1,
+        "passage_index_sha256": EXPECTED_PASSAGE_INDEX_SHA256,
+        "passage_owner_assignment": "sorted_position_mod_world_size_v1",
+        "passage_padding_index": -1,
         "prepared_batches_per_rank": 19,
         "reference_compile": False,
         "resized_tokenizer_size": 50_386,
+        "retriever_forward": "single_top_level_engine_call_query_and_owner_passages_v1",
         "sentinel_index": -1,
         "tf32": False,
         "total_optimizer_updates": 60,
@@ -532,8 +546,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     from transformers.integrations.deepspeed import unset_hf_deepspeed_config
     from transformers.utils import is_flash_attn_2_available
 
-    from retriever.collator import RetrievalBatchCollator
-    from retriever.data import load_candidates_by_case, load_corpus, load_queries
+    from retriever.collator import ControlledRetrievalBatchCollator
+    from retriever.data import PassageIndexTable, load_candidates_by_case, load_corpus, load_queries
     from retriever.markup import SLOT_TOKEN, all_markup_tokens
     from retriever.models import DualEncoderRetriever
     from retriever.sampling import ControlledRetrievalTrainDataset
@@ -579,6 +593,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     training_doc_id_set = set(training_doc_ids)
 
     corpus_by_passage_id = load_corpus(args.data_dir)
+    passage_index_table = PassageIndexTable(corpus_by_passage_id)
+    if len(passage_index_table) != 5_286:
+        raise RuntimeError(
+            f"Controlled passage index contains {len(passage_index_table)} rows; expected 5,286"
+        )
+    if passage_index_table.sha256 != EXPECTED_PASSAGE_INDEX_SHA256:
+        raise RuntimeError(
+            "Controlled corpus-wide passage index digest changed: "
+            f"actual={passage_index_table.sha256}, expected={EXPECTED_PASSAGE_INDEX_SHA256}"
+        )
     candidates_by_case = load_candidates_by_case(args.data_dir)
     all_queries = load_queries(args.data_dir, "all")
     training_queries = [
@@ -591,6 +615,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         corpus_by_passage_id,
         candidates_by_case,
         training_doc_ids,
+        passage_index_table=passage_index_table,
         sampler=args.sampler,
         experiment_seed=args.experiment_seed,
         query_view=args.query_view,
@@ -630,14 +655,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         temperature=experiment["training"]["temperature"],
     )
 
-    passage_text_by_passage_id = {
-        passage_id: passage.text for passage_id, passage in corpus_by_passage_id.items()
-    }
-    collator = RetrievalBatchCollator(
+    collator = ControlledRetrievalBatchCollator(
         tokenizer,
-        passage_text_by_passage_id,
+        corpus_size=len(passage_index_table),
         max_len_query=experiment["training"]["max_query_tokens"],
-        max_len_passage=experiment["training"]["max_passage_tokens"],
     )
     training_args = TrainingArguments(
         output_dir=str(args.output_dir),
@@ -688,6 +709,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         processing_class=tokenizer,
         retrieval_eval_config=None,
         experiment_seed=args.experiment_seed,
+        passage_index_table=passage_index_table,
+        max_len_passage=experiment["training"]["max_passage_tokens"],
     )
     validate_preimport_environment(args.experiment_seed)
     _validate_determinism_state(torch)
@@ -704,11 +727,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "world_size": world_size,
                     "runtime_versions": EXPECTED_RUNTIME_VERSIONS,
                     "snapshot_tree_sha256": snapshot_manifest["tree_sha256"],
+                    "passage_index_sha256": passage_index_table.sha256,
                 },
                 sort_keys=True,
             )
         )
     trainer.train()
+    trace_manifest = trainer.finalize_sampling_traces()
 
     accelerator = trainer.accelerator
     deepspeed_engine = getattr(trainer, "deepspeed", None)
@@ -765,6 +790,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             "deterministic_flash_attn": cpu_encoder.config.deterministic_flash_attn,
             "reference_compile": cpu_encoder.config.reference_compile,
             "snapshot_tree_sha256": snapshot_manifest["tree_sha256"],
+            "passage_index": {
+                "schema_version": 1,
+                "size": len(passage_index_table),
+                "sha256": passage_index_table.sha256,
+            },
+            "candidate_traces": {
+                "manifest_path": "candidate_traces/manifest.json",
+                "manifest_sha256": _sha256(args.output_dir / "candidate_traces/manifest.json"),
+                "record_count": trace_manifest["record_count"],
+                "merged_sha256": trace_manifest["merged"]["sha256"],
+            },
             "resized_tokenizer_size": len(cpu_tokenizer),
             "runtime_versions": EXPECTED_RUNTIME_VERSIONS,
         }

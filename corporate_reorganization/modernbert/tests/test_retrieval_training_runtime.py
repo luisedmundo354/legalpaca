@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import copy
 import importlib.metadata
+import inspect
 import os
 import platform
 import random
@@ -33,9 +35,23 @@ from retriever.batching import (  # noqa: E402
     GlobalQueryBatchSampler,
     SentinelQueryDataset,
 )
-from retriever.collator import RetrievalBatchCollator  # noqa: E402
-from retriever.losses import multi_positive_nce_loss, multi_positive_nce_loss_sum  # noqa: E402
+from retriever.collator import (  # noqa: E402
+    ControlledRetrievalBatchCollator,
+    RetrievalBatchCollator,
+)
+from retriever.losses import (  # noqa: E402
+    build_index_positive_mask,
+    masked_multi_positive_nce_loss_sum,
+    multi_positive_nce_loss,
+    multi_positive_nce_loss_sum,
+)
+from retriever.models import DualEncoderRetriever  # noqa: E402
 from retriever.provenance import EXPECTED_BASE_RUNTIME_VERSIONS  # noqa: E402
+from retriever.sampling import (  # noqa: E402
+    SELECTION_ALGORITHM,
+    TRACE_SCHEMA_VERSION,
+    sampling_trace_checksum,
+)
 from trainer import ControlledRetrievalTrainer  # noqa: E402
 import train_sm as controlled_train  # noqa: E402
 
@@ -236,6 +252,48 @@ class CollatorAndLossTest(unittest.TestCase):
                 "attention_mask": input_ids.ne(0).to(torch.long),
             }
 
+    @staticmethod
+    def _controlled_example(
+        *,
+        query_id: str,
+        positive_indices: list[int],
+        selected_positive_count: int,
+    ) -> dict:
+        positive_ids = [f"p{index:03d}" for index in positive_indices]
+        selected_ids = positive_ids[:selected_positive_count]
+        negative_indices = [
+            index for index in range(100, 200) if index not in positive_indices
+        ][:60]
+        negative_ids = [f"p{index:03d}" for index in negative_indices]
+        payload = {
+            "schema_version": TRACE_SCHEMA_VERSION,
+            "selection_algorithm": SELECTION_ALGORITHM,
+            "sampler": "global_uniform",
+            "experiment_seed": 17,
+            "epoch": 0,
+            "query_id": query_id,
+            "doc_id": "case",
+            "positive_passage_ids": positive_ids,
+            "selected_positive_passage_ids": selected_ids,
+            "negative_passage_ids_by_stratum": {"global": negative_ids},
+            "eligible_pool_sizes_by_stratum": {"global": 100},
+            "candidate_passage_ids": [*selected_ids, *negative_ids],
+        }
+        trace = {**payload, "trace_sha256": sampling_trace_checksum(payload)}
+        return {
+            "is_dummy": False,
+            "query_id": query_id,
+            "doc_id": "case",
+            "query_text": f"query {query_id}",
+            "positive_passage_indices": positive_indices,
+            "candidate_passage_indices": [
+                *positive_indices[:selected_positive_count],
+                *negative_indices,
+            ],
+            "sampling_trace": trace,
+            "sampling_trace_sha256": trace["trace_sha256"],
+        }
+
     def test_mixed_dummy_batch_tokenizes_only_real_scientific_content(self) -> None:
         tokenizer = self.FakeTokenizer()
         collator = RetrievalBatchCollator(
@@ -279,6 +337,53 @@ class CollatorAndLossTest(unittest.TestCase):
             collator([{"is_dummy": True}, {"is_dummy": True}])
         self.assertEqual(tokenizer.calls, prior_calls)
 
+    def test_controlled_collator_transports_indices_and_traces_without_passage_tokenization(self) -> None:
+        tokenizer = self.FakeTokenizer()
+        collator = ControlledRetrievalBatchCollator(
+            tokenizer,
+            corpus_size=200,
+            max_len_query=16,
+        )
+        first = self._controlled_example(
+            query_id="q1",
+            positive_indices=[0, 1, 2, 3, 4],
+            selected_positive_count=4,
+        )
+        second = self._controlled_example(
+            query_id="q2",
+            positive_indices=[5],
+            selected_positive_count=1,
+        )
+        result = collator([first, {"is_dummy": True}, second, {"is_dummy": True}])
+
+        self.assertEqual(tokenizer.calls, [("left", ["query q1", "query q2"])])
+        self.assertEqual(tuple(result["query_input_ids"].shape), (2, 3))
+        self.assertEqual(tuple(result["candidate_passage_indices"].shape), (2, 64))
+        self.assertEqual(tuple(result["positive_passage_indices"].shape), (2, 5))
+        self.assertEqual(result["candidate_passage_indices"][1, -3:].tolist(), [-1, -1, -1])
+        self.assertEqual(result["positive_passage_indices"][1, 1:].tolist(), [-1, -1, -1, -1])
+        self.assertEqual([trace["query_id"] for trace in result["sampling_traces"]], ["q1", "q2"])
+        self.assertNotIn("passage_input_ids", result)
+        self.assertNotIn("passage_id_hashes", result)
+
+        malformed = []
+        duplicate = copy.deepcopy(first)
+        duplicate["candidate_passage_indices"][1] = duplicate["candidate_passage_indices"][0]
+        malformed.append(duplicate)
+        boolean_index = copy.deepcopy(first)
+        boolean_index["candidate_passage_indices"][0] = True
+        malformed.append(boolean_index)
+        out_of_range = copy.deepcopy(first)
+        out_of_range["candidate_passage_indices"][0] = 200
+        malformed.append(out_of_range)
+        no_positive = copy.deepcopy(first)
+        no_positive["candidate_passage_indices"] = list(range(100, 164))
+        malformed.append(no_positive)
+        for example in malformed:
+            with self.subTest(first_candidate=example["candidate_passage_indices"][0]):
+                with self.assertRaises((TypeError, ValueError)):
+                    collator([example])
+
     def test_summed_multi_positive_loss_matches_per_query_definition(self) -> None:
         logits = torch.tensor(
             [[2.0, 1.0, -1.0], [0.0, 3.0, 2.0]],
@@ -298,6 +403,112 @@ class CollatorAndLossTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "at least one positive"):
             multi_positive_nce_loss_sum(logits.detach(), torch.zeros_like(mask))
+
+    def test_controlled_loss_masks_invalid_padding_from_numerator_and_denominator(self) -> None:
+        logits = torch.tensor([[2.0, 1.0, 100.0]], dtype=torch.float64, requires_grad=True)
+        passage_indices = torch.tensor([4, 7, -1], dtype=torch.long)
+        positives = torch.tensor([[4, -1]], dtype=torch.long)
+        valid = torch.tensor([True, True, False], dtype=torch.bool)
+        positive_mask = build_index_positive_mask(passage_indices, positives, valid)
+        loss, _ = masked_multi_positive_nce_loss_sum(logits, positive_mask, valid)
+        expected = torch.logsumexp(logits[0, :2], dim=0) - logits[0, 0]
+        torch.testing.assert_close(loss, expected)
+        loss.backward()
+        self.assertEqual(logits.grad[0, 2].item(), 0.0)
+
+    def test_controlled_forward_uses_the_top_level_engine_call_once(self) -> None:
+        class ForbiddenDirectModule:
+            @staticmethod
+            def encode_queries(*args, **kwargs):
+                raise AssertionError("Trainer bypassed the top-level engine call")
+
+            @staticmethod
+            def encode_passages(*args, **kwargs):
+                raise AssertionError("Trainer bypassed the top-level engine call")
+
+        class RecordingEngine:
+            module = ForbiddenDirectModule()
+
+            def __init__(self) -> None:
+                self.calls = []
+
+            def __call__(self, **kwargs):
+                self.calls.append(kwargs)
+                return {
+                    "query_embeddings": torch.ones((2, 3)),
+                    "passage_embeddings": torch.ones((4, 3)),
+                }
+
+        engine = RecordingEngine()
+        query_embeddings, passage_embeddings = ControlledRetrievalTrainer._forward_controlled_batch(
+            engine,
+            query_input_ids=torch.ones((2, 5), dtype=torch.long),
+            query_attention_mask=torch.ones((2, 5), dtype=torch.long),
+            passage_input_ids=torch.ones((4, 6), dtype=torch.long),
+            passage_attention_mask=torch.ones((4, 6), dtype=torch.long),
+        )
+        self.assertEqual(len(engine.calls), 1)
+        self.assertEqual(tuple(query_embeddings.shape), (2, 3))
+        self.assertEqual(tuple(passage_embeddings.shape), (4, 3))
+
+    def test_dual_encoder_forward_requires_and_encodes_both_branches(self) -> None:
+        self.assertEqual(
+            inspect.signature(DualEncoderRetriever.forward).parameters["unused"].kind,
+            inspect.Parameter.VAR_KEYWORD,
+        )
+
+        class FakeEncoder(torch.nn.Module):
+            @staticmethod
+            def forward(input_ids, attention_mask, return_dict):
+                del attention_mask
+                if return_dict is not True:
+                    raise AssertionError("Retriever changed the encoder return contract")
+                hidden = input_ids.to(torch.float32).unsqueeze(-1).repeat(1, 1, 3)
+                return SimpleNamespace(last_hidden_state=hidden)
+
+        retriever = DualEncoderRetriever(
+            FakeEncoder(),
+            slot_token_id=9,
+            temperature=0.07,
+        )
+        output = retriever(
+            query_input_ids=torch.tensor([[1, 9, 2]], dtype=torch.long),
+            query_attention_mask=torch.ones((1, 3), dtype=torch.long),
+            passage_input_ids=torch.tensor([[1, 2, 3]], dtype=torch.long),
+            passage_attention_mask=torch.ones((1, 3), dtype=torch.long),
+        )
+        self.assertEqual(set(output), {"query_embeddings", "passage_embeddings"})
+        self.assertEqual(tuple(output["query_embeddings"].shape), (1, 3))
+        self.assertEqual(tuple(output["passage_embeddings"].shape), (1, 3))
+        with self.assertRaisesRegex(ValueError, "missing"):
+            retriever(query_input_ids=torch.ones((1, 1), dtype=torch.long))
+        with self.assertRaisesRegex(TypeError, "Unexpected"):
+            retriever(
+                query_input_ids=torch.tensor([[9]], dtype=torch.long),
+                query_attention_mask=torch.ones((1, 1), dtype=torch.long),
+                passage_input_ids=torch.ones((1, 1), dtype=torch.long),
+                passage_attention_mask=torch.ones((1, 1), dtype=torch.long),
+                unexpected=True,
+            )
+
+    def test_owned_passage_tokenizer_state_restores_after_failure(self) -> None:
+        class FailingTokenizer:
+            truncation_side = "left"
+
+            def __call__(self, texts, **kwargs):
+                del texts, kwargs
+                if self.truncation_side != "right":
+                    raise AssertionError("Passage tokenization did not switch to right truncation")
+                raise RuntimeError("injected tokenizer failure")
+
+        tokenizer = FailingTokenizer()
+        with self.assertRaisesRegex(RuntimeError, "injected tokenizer failure"):
+            ControlledRetrievalTrainer._tokenize_owned_passages(
+                tokenizer,
+                ["passage"],
+                max_len_passage=500,
+            )
+        self.assertEqual(tokenizer.truncation_side, "left")
 
 
 class AccumulationContractTest(unittest.TestCase):
@@ -458,22 +669,39 @@ class AccumulationContractTest(unittest.TestCase):
         fake = SimpleNamespace(
             accelerator=SimpleNamespace(sync_gradients=False),
             args=SimpleNamespace(device=torch.device("cpu")),
+            _candidate_trace_store=SimpleNamespace(record_batch=mock.Mock()),
         )
-        with mock.patch.object(Trainer, "training_step", return_value=torch.tensor(1.0)):
+        batch_tensors = {
+            "sampling_traces": [{"query_id": "q"}],
+            "candidate_passage_indices": torch.tensor([[1]], dtype=torch.long),
+            "positive_passage_indices": torch.tensor([[1]], dtype=torch.long),
+        }
+        with mock.patch.object(
+            Trainer,
+            "training_step",
+            return_value=torch.tensor(1.0),
+        ) as parent_training_step:
             ControlledRetrievalTrainer.training_step(
                 fake,
                 engine,
-                {"is_window_end": False},
+                {"is_window_end": False, **batch_tensors},
                 num_items_in_batch=128,
             )
             fake.accelerator.sync_gradients = True
             ControlledRetrievalTrainer.training_step(
                 fake,
                 engine,
-                {"is_window_end": True},
+                {"is_window_end": True, **batch_tensors},
                 num_items_in_batch=38,
             )
         self.assertEqual(engine.boundaries, [False, True])
+        self.assertEqual(fake._candidate_trace_store.record_batch.call_count, 2)
+        self.assertTrue(
+            all(
+                "sampling_traces" not in call.args[2]
+                for call in parent_training_step.call_args_list
+            )
+        )
 
 
 if __name__ == "__main__":

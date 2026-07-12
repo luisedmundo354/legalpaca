@@ -27,12 +27,30 @@ class DualEncoderRetriever(torch.nn.Module):
         passage_input_ids: Optional[torch.Tensor] = None,
         passage_attention_mask: Optional[torch.Tensor] = None,
         **unused: Dict,
-    ) -> Dict[str, Optional[torch.Tensor]]:
-        return {
+    ) -> Dict[str, torch.Tensor]:
+        if unused:
+            raise TypeError(f"Unexpected retriever forward inputs: {sorted(unused)}")
+        named_inputs = {
             "query_input_ids": query_input_ids,
             "query_attention_mask": query_attention_mask,
             "passage_input_ids": passage_input_ids,
             "passage_attention_mask": passage_attention_mask,
+        }
+        missing = [name for name, value in named_inputs.items() if value is None]
+        if missing:
+            raise ValueError(
+                "DualEncoderRetriever.forward requires one complete query/passage batch; "
+                f"missing={missing}"
+            )
+        return {
+            "query_embeddings": self.encode_queries(
+                query_input_ids,
+                query_attention_mask,
+            ),
+            "passage_embeddings": self.encode_passages(
+                passage_input_ids,
+                passage_attention_mask,
+            ),
         }
 
     def encode_queries(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:

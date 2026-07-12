@@ -8,10 +8,15 @@ from typing import Dict, List, Sequence, Tuple
 
 from corporate_reorganization.modernbert.retriever.data import (
     CorpusPassage,
+    PassageIndexTable,
     QueryExample,
     load_candidates_by_case,
     load_corpus,
     load_queries,
+)
+from corporate_reorganization.modernbert.retriever.batching import (
+    DUMMY_QUERY_INDEX,
+    GlobalQueryBatchSampler,
 )
 from corporate_reorganization.modernbert.retriever.legacy_sampling import (
     MultiPositiveRetrievalTrainDataset as LegacyRetrievalTrainDataset,
@@ -268,6 +273,7 @@ class DigestRankedSelectionTest(unittest.TestCase):
 class ControlledSamplingTest(unittest.TestCase):
     def setUp(self) -> None:
         self.corpus, self.candidates, self.queries = make_fixture()
+        self.passage_index_table = PassageIndexTable(self.corpus)
 
     def make_dataset(
         self,
@@ -282,6 +288,7 @@ class ControlledSamplingTest(unittest.TestCase):
             self.corpus,
             self.candidates,
             ["1", "2", "3"],
+            passage_index_table=self.passage_index_table,
             sampler=sampler,
             experiment_seed=seed,
             query_view=query_view,
@@ -297,9 +304,22 @@ class ControlledSamplingTest(unittest.TestCase):
             "31a20b3e8a31cd4cf0a5a15e347362f31c4d3125f391068fe47468816474c03f",
         )
 
-        self.assertEqual(len(sample["selected_positive_passage_ids"]), MAX_EXPLICIT_POSITIVES)
-        self.assertEqual(len(sample["candidate_passage_ids"]), MAX_EXPLICIT_POSITIVES + NUM_EXPLICIT_NEGATIVES)
-        self.assertEqual(len(sample["candidate_passage_ids"]), len(set(sample["candidate_passage_ids"])))
+        self.assertEqual(len(trace["selected_positive_passage_ids"]), MAX_EXPLICIT_POSITIVES)
+        self.assertEqual(len(sample["candidate_passage_indices"]), MAX_EXPLICIT_POSITIVES + NUM_EXPLICIT_NEGATIVES)
+        self.assertEqual(
+            len(sample["candidate_passage_indices"]),
+            len(set(sample["candidate_passage_indices"])),
+        )
+        self.assertEqual(
+            sample["candidate_passage_indices"],
+            self.passage_index_table.indices_for_ids(trace["candidate_passage_ids"]),
+        )
+        self.assertEqual(
+            sample["positive_passage_indices"],
+            self.passage_index_table.indices_for_ids(trace["positive_passage_ids"]),
+        )
+        self.assertNotIn("candidate_passage_ids", sample)
+        self.assertNotIn("positive_passage_ids", sample)
         self.assertEqual(
             len(trace["negative_passage_ids_by_stratum"]["same_case"]),
             NUM_LOCAL_SAME_CASE_NEGATIVES,
@@ -346,8 +366,11 @@ class ControlledSamplingTest(unittest.TestCase):
         for sampler in (SAMPLER_LOCAL_UNIQUE, SAMPLER_GLOBAL_UNIFORM):
             with self.subTest(sampler=sampler):
                 sample = self.make_dataset(sampler)[1]
-                self.assertEqual(sample["selected_positive_passage_ids"], ["1::p005"])
-                self.assertEqual(len(sample["candidate_passage_ids"]), 61)
+                self.assertEqual(
+                    sample["sampling_trace"]["selected_positive_passage_ids"],
+                    ["1::p005"],
+                )
+                self.assertEqual(len(sample["candidate_passage_indices"]), 61)
                 negative_count = sum(
                     len(values)
                     for values in sample["sampling_trace"]["negative_passage_ids_by_stratum"].values()
@@ -370,6 +393,7 @@ class ControlledSamplingTest(unittest.TestCase):
             self.corpus,
             reordered_pools,
             ["3", "2", "1"],
+            passage_index_table=self.passage_index_table,
             sampler=SAMPLER_LOCAL_UNIQUE,
             experiment_seed=17,
         )
@@ -380,12 +404,12 @@ class ControlledSamplingTest(unittest.TestCase):
         self.assertEqual(local[0]["sampling_trace"], reversed_dataset[1]["sampling_trace"])
         self.assertEqual(local[0]["sampling_trace"], reordered_pool_dataset[0]["sampling_trace"])
         self.assertEqual(
-            local[0]["selected_positive_passage_ids"],
-            global_dataset[0]["selected_positive_passage_ids"],
+            local[0]["sampling_trace"]["selected_positive_passage_ids"],
+            global_dataset[0]["sampling_trace"]["selected_positive_passage_ids"],
         )
         self.assertEqual(
-            local[0]["selected_positive_passage_ids"],
-            flat_dataset[0]["selected_positive_passage_ids"],
+            local[0]["sampling_trace"]["selected_positive_passage_ids"],
+            flat_dataset[0]["sampling_trace"]["selected_positive_passage_ids"],
         )
         self.assertEqual(local[0]["sampling_trace_sha256"], flat_dataset[0]["sampling_trace_sha256"])
 
@@ -477,6 +501,7 @@ class ControlledSamplingTest(unittest.TestCase):
                 small_corpus,
                 small_candidates,
                 ["1", "2"],
+                passage_index_table=PassageIndexTable(small_corpus),
                 sampler=SAMPLER_LOCAL_UNIQUE,
                 experiment_seed=17,
             )
@@ -489,6 +514,7 @@ class ControlledSamplingTest(unittest.TestCase):
                 self.corpus,
                 incomplete,
                 ["1", "2", "3"],
+                passage_index_table=self.passage_index_table,
                 sampler=SAMPLER_GLOBAL_UNIFORM,
                 experiment_seed=17,
             )
@@ -499,6 +525,26 @@ class ControlledSamplingTest(unittest.TestCase):
                 self.corpus,
                 self.candidates,
                 ["1", "2", "3"],
+                passage_index_table=self.passage_index_table,
+                sampler=SAMPLER_GLOBAL_UNIFORM,
+                experiment_seed=17,
+            )
+
+        changed_corpus = dict(self.corpus)
+        original = changed_corpus["1::p000"]
+        changed_corpus["1::p000"] = CorpusPassage(
+            passage_id=original.passage_id,
+            doc_id=original.doc_id,
+            label=original.label,
+            text="different indexed text",
+        )
+        with self.assertRaisesRegex(ValueError, "text disagrees"):
+            ControlledRetrievalTrainDataset(
+                self.queries,
+                self.corpus,
+                self.candidates,
+                ["1", "2", "3"],
+                passage_index_table=PassageIndexTable(changed_corpus),
                 sampler=SAMPLER_GLOBAL_UNIFORM,
                 experiment_seed=17,
             )
@@ -510,10 +556,16 @@ class FrozenDatasetSamplingIntegrationTest(unittest.TestCase):
         cls.corpus = load_corpus(DATASET_DIR)
         cls.queries = load_queries(DATASET_DIR, "all")
         cls.candidates = load_candidates_by_case(DATASET_DIR)
+        cls.passage_index_table = PassageIndexTable(cls.corpus)
         cls.folds = json.loads(FOLDS_CONFIG.read_text(encoding="utf-8"))
         cls.experiment = json.loads(EXPERIMENT_CONFIG.read_text(encoding="utf-8"))
 
     def test_frozen_config_matches_sampler_constants(self) -> None:
+        self.assertEqual(len(self.passage_index_table), 5_286)
+        self.assertEqual(
+            self.passage_index_table.sha256,
+            "641b7a6f9f77d308b9b2b4b38ab2318ffdbc61af4b4ad718caf0d3ad571ec43d",
+        )
         samplers = self.experiment["samplers"]
         self.assertEqual(samplers["common"]["max_explicit_positives"], MAX_EXPLICIT_POSITIVES)
         self.assertEqual(samplers["common"]["explicit_negatives"], NUM_EXPLICIT_NEGATIVES)
@@ -549,12 +601,59 @@ class FrozenDatasetSamplingIntegrationTest(unittest.TestCase):
                         self.corpus,
                         self.candidates,
                         training_doc_ids,
+                        passage_index_table=self.passage_index_table,
                         sampler=sampler,
                         experiment_seed=17,
                     )
                     self.assertEqual(len(dataset), 294)
                     validate_sampling_trace(dataset[0]["sampling_trace"])
                     validate_sampling_trace(dataset[len(dataset) - 1]["sampling_trace"])
+
+    def test_real_fold_zero_layout_requires_variable_shape_global_deduplication(self) -> None:
+        rotation = self.folds["rotations"][0]
+        training_doc_ids = list(rotation["train"]["case_ids"])
+        training_doc_id_set = set(training_doc_ids)
+        training_queries = [
+            query for query in self.queries if query.doc_id in training_doc_id_set
+        ]
+        dataset = ControlledRetrievalTrainDataset(
+            training_queries,
+            self.corpus,
+            self.candidates,
+            training_doc_ids,
+            passage_index_table=self.passage_index_table,
+            sampler=SAMPLER_LOCAL_UNIQUE,
+            experiment_seed=17,
+        )
+        batch_sampler = GlobalQueryBatchSampler(
+            [query.query_id for query in training_queries],
+            experiment_seed=17,
+            world_size=4,
+            per_device_batch_size=4,
+        )
+        raw_batches = batch_sampler.batches()
+        local_candidate_counts: List[List[int]] = []
+        for microbatch in range(19):
+            counts = []
+            global_candidates = set()
+            for rank in range(4):
+                indices = raw_batches[microbatch * 4 + rank]
+                local_candidates = [
+                    passage_index
+                    for query_index in indices
+                    if query_index != DUMMY_QUERY_INDEX
+                    for passage_index in dataset[query_index]["candidate_passage_indices"]
+                ]
+                counts.append(len(local_candidates))
+                global_candidates.update(local_candidates)
+            local_candidate_counts.append(counts)
+            owner_counts = [len(sorted(global_candidates)[rank::4]) for rank in range(4)]
+            self.assertLessEqual(max(owner_counts) - min(owner_counts), 1)
+            self.assertGreater(min(owner_counts), 0)
+
+        self.assertEqual(local_candidate_counts[0], [249, 248, 251, 248])
+        self.assertEqual(local_candidate_counts[-1], [123, 122, 63, 61])
+        self.assertEqual(sum(len(set(counts)) > 1 for counts in local_candidate_counts), 18)
 
 
 if __name__ == "__main__":
