@@ -369,6 +369,7 @@ class StrictEntrypointTest(unittest.TestCase):
             (None, "schema_version"),
             ("aws_training", "instance_count"),
             ("training", "max_grad_norm"),
+            ("runtime_control", "validation_forward_steps"),
         ):
             changed = copy.deepcopy(experiment)
             if section is None:
@@ -383,6 +384,30 @@ class StrictEntrypointTest(unittest.TestCase):
                     sampler="local_unique",
                     experiment_seed=17,
                 )
+
+        changed = copy.deepcopy(experiment)
+        changed["training"]["model_selection"]["primary"] = (
+            "validation_case_macro_hit_at_20"
+        )
+        with self.assertRaisesRegex(ValueError, "model-selection"):
+            controlled_train._validate_experiment_config(
+                changed,
+                outer_fold=0,
+                query_view="structured",
+                sampler="local_unique",
+                experiment_seed=17,
+            )
+
+        changed = copy.deepcopy(experiment)
+        changed["evaluation"]["primary_candidate_regime"] = "all_42_cases"
+        with self.assertRaisesRegex(ValueError, "evaluation"):
+            controlled_train._validate_experiment_config(
+                changed,
+                outer_fold=0,
+                query_view="structured",
+                sampler="local_unique",
+                experiment_seed=17,
+            )
 
         with self.assertRaisesRegex(ValueError, "exact integer"):
             controlled_train._validate_experiment_config(

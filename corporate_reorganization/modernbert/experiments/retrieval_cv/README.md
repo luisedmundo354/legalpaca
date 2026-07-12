@@ -108,11 +108,45 @@ boundary is set explicitly on every microbatch, including the final
 three-microbatch window, and gradient clipping is frozen at 1.0 in
 `ds_zero3.json`.
 
-This is not yet an executable end-to-end controlled retriever. Step 5 owns the
-remaining cross-rank passage correction: integer passage IDs, deterministic
-global deduplication, variable-shape padding, autograd-aware embedding gather,
-invalid masks, and remote-passage gradients. The current passage collective is
-deliberately left unchanged rather than hidden behind a temporary fallback.
+The controlled loss uses a corpus-wide immutable passage-index table. Each
+microbatch constructs one sorted global union of proposed candidate indices;
+position modulo four assigns every real passage to exactly one rank. Padded
+autograd-aware all-gather gives every query the same denominator while routing
+remote-query gradients to the sole passage owner. Complete all-gold index sets,
+not only the at-most-four sampled training positives, define the numerator.
+Candidate traces bind every sampled string ID to the transported integer rows.
+
+## Validation and checkpoint selection
+
+Validation is reconstructed from `queries/all.jsonl` and the validation cases
+in the selected rotation. Its candidate pool is all and only passages from that
+fold: 98 queries and, by fold, 1,054, 1,060, 1,055, 1,055, or 1,062 passages.
+Every complete gold set must be contained in the same validation case.
+
+Sorted query and passage positions are sharded modulo four without sampler
+padding. Every rank makes exactly seven paired top-level DeepSpeed forwards,
+with query chunks of at most four and passage chunks of at most 38. Rank zero
+reconstructs the full embeddings, scores in CPU float32, and ranks by score
+descending then passage ID ascending. It broadcasts the strict result schema,
+including query-micro and case-macro hit, set recall, exact target recovery,
+and full-ranking first-gold reciprocal rank.
+
+The selected checkpoint maximizes validation case-macro set recall@20, then
+validation case-macro full-ranking first-gold reciprocal rank, with the earlier
+epoch winning an exact tie. Training always completes all 20 epochs. Checkpoint
+directories use explicit `global_stepN` DeepSpeed tags and include complete
+ZeRO-3 model/optimizer shards, the external linear scheduler, per-rank RNG,
+Trainer state, validation metadata, and content hashes. Publication and
+best/last retention are collective and fail loudly.
+
+Stock `load_best_model_at_end` is disabled because DeepSpeed 0.17.1 requires a
+pristine engine for a ZeRO-3 reload. After training, Engine A is collectively
+destroyed; an unpartitioned model is rebuilt with the common seed and prepared
+as Engine B; every rank strictly loads the selected explicit tag and restores
+optimizer, external scheduler, and RNG state. The selected validation result
+must reproduce exactly. The final BF16 safetensors artifact comes from this
+verified Engine B. A final artifact manifest is written last; its absence means
+the run is incomplete.
 
 ## Files
 
@@ -138,6 +172,10 @@ Run the focused tests:
     PYTHONDONTWRITEBYTECODE=1 python -m unittest -v corporate_reorganization.modernbert.tests.test_retrieval_cv_folds
     PYTHONDONTWRITEBYTECODE=1 python -m unittest -v corporate_reorganization.modernbert.tests.test_retrieval_sampling
     PYTHONDONTWRITEBYTECODE=1 python -m unittest -v corporate_reorganization.modernbert.tests.test_retrieval_training_control
+    PYTHONDONTWRITEBYTECODE=1 python -m unittest -v corporate_reorganization.modernbert.tests.test_retrieval_validation
+    PYTHONDONTWRITEBYTECODE=1 python -m unittest -v corporate_reorganization.modernbert.tests.test_retrieval_checkpointing
+    PYTHONDONTWRITEBYTECODE=1 python -m unittest -v corporate_reorganization.modernbert.tests.test_retrieval_trainer_lifecycle_runtime
+    PYTHONDONTWRITEBYTECODE=1 python -m unittest -v corporate_reorganization.modernbert.tests.test_retrieval_deepspeed_lifecycle_cuda
 
 The pinned-container runtime command is documented in
 `corporate_reorganization/modernbert/README.md`.

@@ -46,10 +46,33 @@ non-padding tokens after position zero. The controlled samplers and complete
 scientific matrix are documented in `experiments/retrieval_cv/README.md`.
 
 Step 4 freezes process determinism, global query ordering, lossless final
-batches, and optimizer-window normalization. The real cross-rank passage path
-is intentionally not certified yet: Step 5 must add unique integer passage
-tables, padded autograd-aware gathering, and remote-passage gradients before a
-controlled training job can be launched.
+batches, and optimizer-window normalization. Step 5 implements the exact
+cross-rank passage path: corpus-wide integer indices, deterministic global
+deduplication and balanced ownership, padded autograd-aware gathering, and
+all-gold multi-positive loss masks.
+
+Step 6 evaluates the complete held-out validation fold after every epoch. Each
+rank owns sorted global positions modulo four and makes exactly seven paired
+top-level DeepSpeed forwards; rank zero scores all validation queries against
+all and only validation-fold passages in CPU float32 and broadcasts one
+canonical result. Checkpoint selection is lexicographic: maximize case-macro
+set recall@20, then case-macro full-ranking first-gold reciprocal rank, then
+retain the earlier epoch.
+
+Every epoch checkpoint is an atomically published, explicit-tag ZeRO-3
+checkpoint containing model and optimizer shards, the external Transformers
+scheduler, per-rank RNG state, Trainer state, validation selection metrics and
+digests, and hashes of every file. The complete per-query/per-case result is in
+the corresponding validation epoch metadata. Collective retention keeps
+exactly the selected best and chronological last checkpoints. After epoch 20,
+the code destroys Engine A,
+constructs pristine Engine B, strictly loads the selected explicit tag on all
+ranks, restores optimizer/scheduler/RNG state, and requires exact validation
+reproduction. This is a same-run verification/export path, not a general
+Trainer-resume interface. The final `model.safetensors` is the BF16 state
+gathered from the verified Engine B and is strict-loaded into two fresh CPU
+retrievers to prove a bitwise round trip. `artifact_manifest.json` is published
+last as the successful-run commit marker.
 
 ## Evaluation
 
@@ -84,7 +107,7 @@ Notes:
   - `fine_tuned_flat`
   - `fine_tuned_structured`
 
-## Step 4 verification
+## Controlled verification
 
 The dependency-free controls run in the local environment:
 
@@ -122,3 +145,18 @@ vocabulary growth is 18 rows (50,368 to 50,386):
       763104351884.dkr.ecr.us-east-1.amazonaws.com/huggingface-pytorch-training@sha256:e6ad17f88da21a7dc1347e68a2009a23827ca24fffdc03226095f46d0e9e53c9 \
       -m unittest -v \
       corporate_reorganization.modernbert.tests.test_retrieval_training_snapshot_runtime
+
+The Step 6 CPU/Gloo contracts run in the same pinned base image:
+
+    python -m unittest -v \
+      corporate_reorganization.modernbert.tests.test_retrieval_validation \
+      corporate_reorganization.modernbert.tests.test_retrieval_checkpointing \
+      corporate_reorganization.modernbert.tests.test_retrieval_trainer_lifecycle_runtime
+
+The derived runtime also contains a skip-capable two-GPU NCCL/ZeRO-3 lifecycle
+gate. A local skip is expected on a CPU-only host and is not a launch pass. Run
+that gate plus the existing four-GPU NCCL/BF16 tests on the production-shaped
+`ml.g5.12xlarge` pilot before submitting the 60 controlled jobs.
+
+    python -m unittest -v \
+      corporate_reorganization.modernbert.tests.test_retrieval_deepspeed_lifecycle_cuda
