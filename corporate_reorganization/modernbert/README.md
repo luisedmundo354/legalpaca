@@ -4,11 +4,26 @@ This folder is the home for the ModernBERT dual-encoder retriever code for the c
 
 ## Dataset build
 
-- `corporate_reorganization/modernbert/data_prep/build_final_annotations_gold_dataset.py`
+- corporate_reorganization/modernbert/data_prep/build_final_annotations_gold_dataset.py
+- corporate_reorganization/modernbert/data_prep/relations.py
 
-This writes the processed dataset under:
+The corrected builder reads every adjudicated case, normalizes Label Studio
+relation direction strictly, and writes a new immutable dataset under:
 
-- `corporate_reorganization/data/final_annotations_gold/processed/`
+- corporate_reorganization/data/final_annotations_gold/processed_retrieval_v2/
+
+The historical processed/ directory is the immutable March reconstruction and
+is never rewritten by the corrected builder. Experiment folds are deliberately
+outside both dataset directories.
+
+Run the focused builder suite from the repository root with the exact pinned
+tokenizer snapshot:
+
+    TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1 PYTHONDONTWRITEBYTECODE=1 \
+      ARR_TOKENIZER_DIR=/path/to/pinned/ModernBERT/snapshot \
+      python -m unittest -v \
+      corporate_reorganization.modernbert.tests.test_relations \
+      corporate_reorganization.modernbert.tests.test_final_annotations_builder
 
 ## Training (SageMaker / Deepspeed)
 
