@@ -133,6 +133,56 @@ def _pretty_bytes(value: object) -> bytes:
     ).encode("utf-8")
 
 
+def _portable_runtime_identity(
+    *, context_identity: str, files_sha256: str
+) -> dict[str, object]:
+    return {
+        "runtime_identity_protocol": (
+            image_smoke.PORTABLE_RUNTIME_IDENTITY_PROTOCOL
+        ),
+        "base_image": {
+            "config_digest": build_context.BASE_IMAGE_CONFIG_DIGEST,
+            "digest": build_context.BASE_IMAGE_URI.rsplit("@", 1)[1],
+            "uri": build_context.BASE_IMAGE_URI,
+        },
+        "build_context": {
+            "build_identity_sha256": context_identity,
+            "files_sha256": files_sha256,
+            "source_parent_commit": "a" * 40,
+            "source_parent_epoch": FIXED_EPOCH,
+            "source_parent_rfc3339": "2023-11-14T22:13:20Z",
+            "toolchain": FIXED_TOOLCHAIN,
+        },
+        "image_contract_sha256": build_context.FOLD_IMAGE_CONTRACT_SHA256,
+        "inherited_runtime": {
+            "build_identity_sha256": (
+                build_context.INHERITED_BUILD_IDENTITY_SHA256
+            ),
+            "files_sha256": build_context.INHERITED_FILES_SHA256,
+            "image_contract_sha256": (
+                build_context.INHERITED_IMAGE_CONTRACT_SHA256
+            ),
+            "neural_runtime": dict(build_context.INHERITED_NEURAL_RUNTIME),
+            "sparse_runtime": {
+                **json.loads(
+                    json.dumps(build_context.INHERITED_SPARSE_RUNTIME)
+                ),
+                "java_version": build_context.INHERITED_JAVA_VERSION,
+            },
+        },
+        "module_origins": {
+            "processing_fold_eval.archive_bridge": (
+                "processing_fold_eval/archive_bridge.py"
+            ),
+            "retriever.artifacts": "retriever/artifacts.py",
+            "retriever.evaluator": "retriever/evaluator.py",
+            "retriever.provenance": "retriever/provenance.py",
+            "retriever.staged_data": "retriever/staged_data.py",
+        },
+        "platform": build_context.PLATFORM,
+    }
+
+
 def _run_git(root: Path, *arguments: str, environment: dict[str, str] | None = None) -> str:
     completed = subprocess.run(
         ["git", "-C", str(root), *arguments],
@@ -633,7 +683,7 @@ class ProcessingFoldImageContractTest(unittest.TestCase):
         origins = image_smoke._validate_module_origins(MODERNBERT_DIR)
         self.assertEqual(
             origins["retriever.evaluator"],
-            str(MODERNBERT_DIR / "retriever/evaluator.py"),
+            "retriever/evaluator.py",
         )
         wrong = SimpleNamespace(
             __file__=str(MODERNBERT_DIR / "elsewhere.py"),
@@ -646,18 +696,66 @@ class ProcessingFoldImageContractTest(unittest.TestCase):
         ), self.assertRaisesRegex(RuntimeError, "module origin changed"):
             image_smoke._validate_module_origins(MODERNBERT_DIR)
 
+    def test_emitted_runtime_identity_is_portable_but_exactly_qualified(self) -> None:
+        identity = {
+            "runtime_identity_protocol": (
+                image_smoke.PORTABLE_RUNTIME_IDENTITY_PROTOCOL
+            ),
+            "inherited_runtime": {
+                "sparse_runtime": {
+                    "java_home": image_smoke._container_path_uri(
+                        "/opt/amazon-corretto-21", name="JAVA_HOME"
+                    )
+                }
+            },
+            "module_origins": image_smoke._validate_module_origins(
+                MODERNBERT_DIR
+            ),
+        }
+        validated = image_smoke._validate_portable_runtime_identity(identity)
+        self.assertEqual(
+            validated["inherited_runtime"]["sparse_runtime"]["java_home"],
+            "container:///opt/amazon-corretto-21",
+        )
+        self.assertEqual(
+            validated["module_origins"]["retriever.evaluator"],
+            "retriever/evaluator.py",
+        )
+        for bad in ("/opt/amazon-corretto-21", "file:///opt/amazon-corretto-21"):
+            changed = json.loads(json.dumps(identity))
+            changed["inherited_runtime"]["sparse_runtime"]["java_home"] = bad
+            with self.subTest(bad=bad), self.assertRaisesRegex(
+                ValueError, "local absolute path"
+            ):
+                image_smoke._validate_portable_runtime_identity(changed)
+
+        from retriever.evaluator import _validate_scientific_json
+
+        self.assertEqual(
+            _validate_scientific_json(validated, name="runtime_identity"),
+            validated,
+        )
+
     def test_reproducible_build_comparator_rejects_spliced_receipts(self) -> None:
         context_identity = "1" * 64
+        files_sha256 = "2" * 64
         content_tag = f"build-sha256-{context_identity}"
+        runtime_identity = _portable_runtime_identity(
+            context_identity=context_identity,
+            files_sha256=files_sha256,
+        )
         common = {
-            "build_context_files_sha256": "2" * 64,
+            "build_context_files_sha256": files_sha256,
             "build_context_identity_sha256": context_identity,
             "config_digest": "sha256:" + "3" * 64,
             "content_tag": content_tag,
             "image_digest": "sha256:" + "4" * 64,
+            "image_runtime_identity": runtime_identity,
             "local_image_identity_sha256": "5" * 64,
             "manifest_media_type": build_context.DOCKER_MANIFEST_MEDIA_TYPE,
-            "offline_smoke_sha256": "6" * 64,
+            "offline_smoke_sha256": build_context._sha256_bytes(
+                build_context._canonical_json(runtime_identity).encode("utf-8")
+            ),
         }
         first = {
             **common,
@@ -702,16 +800,202 @@ class ProcessingFoldImageContractTest(unittest.TestCase):
                     {**second, key: malformed},
                 )
 
+        with self.assertRaisesRegex(ValueError, "schema changed"):
+            build_context.validate_reproducible_builds(
+                {**first, "image_runtime_identity": {}},
+                {**second, "image_runtime_identity": {}},
+            )
+        malformed_runtime = {
+            "runtime_identity_protocol": "wrong",
+            "raw_path": "/etc/passwd",
+        }
+        malformed_hash = build_context._sha256_bytes(
+            build_context._canonical_json(malformed_runtime).encode("utf-8")
+        )
+        with self.assertRaisesRegex(ValueError, "schema changed"):
+            build_context.validate_reproducible_builds(
+                {
+                    **first,
+                    "image_runtime_identity": malformed_runtime,
+                    "offline_smoke_sha256": malformed_hash,
+                },
+                {
+                    **second,
+                    "image_runtime_identity": malformed_runtime,
+                    "offline_smoke_sha256": malformed_hash,
+                },
+            )
+        for field, bad_value, expected_error in (
+            (
+                "runtime_identity_protocol",
+                "wrong",
+                "top-level identity changed",
+            ),
+            (
+                "java_home",
+                "/etc/passwd",
+                "local absolute path",
+            ),
+        ):
+            with self.subTest(equal_rehashed_runtime_field=field):
+                invalid_runtime = json.loads(json.dumps(runtime_identity))
+                if field == "runtime_identity_protocol":
+                    invalid_runtime[field] = bad_value
+                else:
+                    invalid_runtime["inherited_runtime"]["sparse_runtime"][
+                        field
+                    ] = bad_value
+                invalid_hash = build_context._sha256_bytes(
+                    build_context._canonical_json(invalid_runtime).encode("utf-8")
+                )
+                with self.assertRaisesRegex(ValueError, expected_error):
+                    build_context.validate_reproducible_builds(
+                        {
+                            **first,
+                            "image_runtime_identity": invalid_runtime,
+                            "offline_smoke_sha256": invalid_hash,
+                        },
+                        {
+                            **second,
+                            "image_runtime_identity": invalid_runtime,
+                            "offline_smoke_sha256": invalid_hash,
+                        },
+                    )
+        for section, field, expected_error in (
+            ("neural_runtime", "torch", "neural runtime version changed"),
+            ("sparse_runtime", "protocol", "sparse runtime identity changed"),
+            (
+                "sparse_runtime",
+                "java_version",
+                "sparse runtime identity changed",
+            ),
+        ):
+            with self.subTest(equal_rehashed_inherited_field=field):
+                invalid_runtime = json.loads(json.dumps(runtime_identity))
+                invalid_runtime["inherited_runtime"][section][field] = "altered"
+                invalid_hash = build_context._sha256_bytes(
+                    build_context._canonical_json(invalid_runtime).encode("utf-8")
+                )
+                with self.assertRaisesRegex(ValueError, expected_error):
+                    build_context.validate_reproducible_builds(
+                        {
+                            **first,
+                            "image_runtime_identity": invalid_runtime,
+                            "offline_smoke_sha256": invalid_hash,
+                        },
+                        {
+                            **second,
+                            "image_runtime_identity": invalid_runtime,
+                            "offline_smoke_sha256": invalid_hash,
+                        },
+                    )
+        float_substitutions = (
+            (
+                ("inherited_runtime", "sparse_runtime", "anserini_jar_size"),
+                163855488.0,
+                "sparse runtime identity changed",
+            ),
+            (
+                (
+                    "inherited_runtime",
+                    "sparse_runtime",
+                    "installed_distributions",
+                    "pyjnius",
+                    "file_count",
+                ),
+                16.0,
+                "Installed distribution pyjnius identity changed",
+            ),
+            (
+                (
+                    "inherited_runtime",
+                    "sparse_runtime",
+                    "installed_distributions",
+                    "pyserini",
+                    "total_size",
+                ),
+                165653249.0,
+                "Installed distribution pyserini identity changed",
+            ),
+        )
+        for path, float_value, expected_error in float_substitutions:
+            with self.subTest(equal_rehashed_float_path=path):
+                invalid_runtime = json.loads(json.dumps(runtime_identity))
+                parent = invalid_runtime
+                for part in path[:-1]:
+                    parent = parent[part]
+                parent[path[-1]] = float_value
+                invalid_hash = build_context._sha256_bytes(
+                    build_context._canonical_json(invalid_runtime).encode("utf-8")
+                )
+                with self.assertRaisesRegex(ValueError, expected_error):
+                    build_context.validate_reproducible_builds(
+                        {
+                            **first,
+                            "image_runtime_identity": invalid_runtime,
+                            "offline_smoke_sha256": invalid_hash,
+                        },
+                        {
+                            **second,
+                            "image_runtime_identity": invalid_runtime,
+                            "offline_smoke_sha256": invalid_hash,
+                        },
+                    )
+        mismatched_nested = json.loads(json.dumps(runtime_identity))
+        mismatched_nested["build_context"]["build_identity_sha256"] = "e" * 64
+        mismatched_hash = build_context._sha256_bytes(
+            build_context._canonical_json(mismatched_nested).encode("utf-8")
+        )
+        with self.assertRaisesRegex(ValueError, "build-context identity changed"):
+            build_context.validate_reproducible_builds(
+                {
+                    **first,
+                    "image_runtime_identity": mismatched_nested,
+                    "offline_smoke_sha256": mismatched_hash,
+                },
+                {
+                    **second,
+                    "image_runtime_identity": mismatched_nested,
+                    "offline_smoke_sha256": mismatched_hash,
+                },
+            )
+        spliced_runtime = {
+            **runtime_identity,
+            "unexpected_runtime": "different",
+        }
+        with self.assertRaisesRegex(ValueError, "schema changed"):
+            build_context.validate_reproducible_builds(
+                first,
+                {
+                    **second,
+                    "image_runtime_identity": spliced_runtime,
+                    "offline_smoke_sha256": build_context._sha256_bytes(
+                        build_context._canonical_json(spliced_runtime).encode("utf-8")
+                    ),
+                },
+            )
+
         wrong_common_identity = "7" * 64
+        wrong_common_runtime = json.loads(json.dumps(runtime_identity))
+        wrong_common_runtime["build_context"]["build_identity_sha256"] = (
+            wrong_common_identity
+        )
+        wrong_common_runtime_hash = build_context._sha256_bytes(
+            build_context._canonical_json(wrong_common_runtime).encode("utf-8")
+        )
         with self.assertRaisesRegex(ValueError, "content tag"):
             build_context.validate_reproducible_builds(
                 {
                     **first,
                     "build_context_identity_sha256": wrong_common_identity,
+                    "image_runtime_identity": wrong_common_runtime,
+                    "offline_smoke_sha256": wrong_common_runtime_hash,
                 },
                 {
                     **second,
                     "build_context_identity_sha256": wrong_common_identity,
+                    "image_runtime_identity": wrong_common_runtime,
+                    "offline_smoke_sha256": wrong_common_runtime_hash,
                 },
             )
 

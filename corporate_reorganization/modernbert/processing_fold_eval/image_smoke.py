@@ -31,6 +31,7 @@ from processing_fold_eval.build_context import (  # noqa: E402
     MANIFEST_SCHEMA_VERSION,
     MANIFEST_TYPE,
     PLATFORM,
+    PORTABLE_RUNTIME_IDENTITY_PROTOCOL,
     load_build_context_manifest,
 )
 
@@ -119,6 +120,55 @@ _OVERRIDDEN_RETRIEVER_FILES = {
     "retriever/provenance.py",
     "retriever/staged_data.py",
 }
+
+
+def _container_path_uri(value: object, *, name: str) -> str:
+    if type(value) is not str:
+        raise TypeError(f"{name} must be one exact container path string")
+    path = PurePosixPath(value)
+    if (
+        not path.is_absolute()
+        or path.as_posix() != value
+        or any(part in {"", ".", ".."} for part in path.parts[1:])
+    ):
+        raise ValueError(f"{name} must be one normalized absolute container path")
+    return "container://" + value
+
+
+def _validate_portable_runtime_identity(value: object) -> dict[str, Any]:
+    if type(value) is not dict or not value:
+        raise ValueError("Portable runtime identity must be one non-empty object")
+    normalized = json.loads(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    )
+
+    def inspect(item: object, *, path: str) -> None:
+        if type(item) is dict:
+            for key, child in item.items():
+                if type(key) is not str or not key or key.strip() != key:
+                    raise ValueError(f"{path} contains an invalid key")
+                inspect(child, path=f"{path}.{key}")
+        elif type(item) is list:
+            for position, child in enumerate(item):
+                inspect(child, path=f"{path}[{position}]")
+        elif type(item) is str:
+            if item.startswith(("/", "file://")):
+                raise ValueError(f"{path} contains a local absolute path")
+        elif item is None or type(item) in {bool, int, float}:
+            return
+        else:
+            raise TypeError(f"{path} contains a non-JSON value")
+
+    inspect(normalized, path="runtime_identity")
+    if normalized.get("runtime_identity_protocol") != PORTABLE_RUNTIME_IDENTITY_PROTOCOL:
+        raise ValueError("Portable runtime identity protocol changed")
+    return normalized
 EXPECTED_SOURCE_INVENTORY = [
     "processing_fold_eval/__init__.py",
     "processing_fold_eval/archive_bridge.py",
@@ -530,6 +580,12 @@ def _validate_inherited_runtime(
     }
     if installed_distributions != expected_installed_distributions:
         raise RuntimeError("Inherited sparse installed-file inventory changed")
+    portable_sparse_identity = {
+        **sparse_identity,
+        "java_home": _container_path_uri(
+            sparse_identity["java_home"], name="Validated JAVA_HOME"
+        ),
+    }
     return {
         "build_identity_sha256": inherited_manifest["build_identity_sha256"],
         "files_sha256": inherited_manifest["files_sha256"],
@@ -540,13 +596,15 @@ def _validate_inherited_runtime(
             "torch_runtime": str(torch.__version__),
         },
         "sparse_runtime": {
-            **sparse_identity,
+            **portable_sparse_identity,
             "installed_distributions": installed_distributions,
         },
     }
 
 
 def _validate_module_origins(program_root: Path) -> dict[str, str]:
+    if not program_root.is_absolute():
+        raise ValueError("Overlay program root must be absolute")
     expected = {
         "processing_fold_eval.archive_bridge": (
             program_root / "processing_fold_eval/archive_bridge.py"
@@ -573,7 +631,10 @@ def _validate_module_origins(program_root: Path) -> dict[str, str]:
                 "Overlay module origin changed: "
                 f"module={module_name!r}, file={origin}, spec={specification_origin!r}"
             )
-        origins[module_name] = str(origin)
+        relative = path.relative_to(program_root)
+        if relative.is_absolute() or relative.as_posix() in {"", "."}:
+            raise RuntimeError("Overlay module origin did not produce one relative identity")
+        origins[module_name] = relative.as_posix()
     return origins
 
 
@@ -668,7 +729,8 @@ def validate_image_runtime(
     )
     if forbidden_loaded:
         raise RuntimeError(f"Overlay runtime imported an AWS SDK: {forbidden_loaded}")
-    return {
+    identity = {
+        "runtime_identity_protocol": PORTABLE_RUNTIME_IDENTITY_PROTOCOL,
         "base_image": contract["base_image"],
         "build_context": {
             "build_identity_sha256": manifest["build_identity_sha256"],
@@ -683,6 +745,7 @@ def validate_image_runtime(
         "module_origins": module_origins,
         "platform": contract["platform"],
     }
+    return _validate_portable_runtime_identity(identity)
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:

@@ -50,6 +50,69 @@ FILE_MODE = "0644"
 DIRECTORY_MODE = "0755"
 DOCKER_MANIFEST_MEDIA_TYPE = "application/vnd.docker.distribution.manifest.v2+json"
 LOCAL_IMAGE_REPOSITORY = "arr-retrieval-fold-eval"
+PORTABLE_RUNTIME_IDENTITY_PROTOCOL = "arr_retrieval_fold_runtime_identity_v2"
+FOLD_IMAGE_CONTRACT_SHA256 = (
+    "364a57629a514c67cc3dec46605d9e2bb7af9779d140e0b0d26cd0f5161e7376"
+)
+INHERITED_BUILD_IDENTITY_SHA256 = (
+    "249a373465c33d2af5f807eecf6016b08dc086ca04b588e3a2a6a5a640aa2fc8"
+)
+INHERITED_FILES_SHA256 = (
+    "96f8b4e5569404ed916cd69c4d765b3eb34cbd3f40e3eff8394e9de72f415dc4"
+)
+INHERITED_IMAGE_CONTRACT_SHA256 = (
+    "c0dba1f1a2387bce425b6c33f83e5035d3904ccb62de0e4f1422602ead0cbca8"
+)
+INHERITED_NEURAL_RUNTIME = {
+    "accelerate": "1.4.0",
+    "cuda": "12.4",
+    "flash-attn": "2.7.3",
+    "huggingface-hub": "0.29.1",
+    "numpy": "1.26.4",
+    "packaging": "24.1",
+    "python": "3.11.10",
+    "safetensors": "0.5.3",
+    "tokenizers": "0.21.4",
+    "torch": "2.5.1+cu124",
+    "torch_runtime": "2.5.1+cu124",
+    "transformers": "4.49.0",
+}
+INHERITED_JAVA_VERSION_OUTPUT_SHA256 = (
+    "64dbcaf74f7772c14d5614c83acefd0aba65da9f90694b8815af908ff6bcf7f1"
+)
+INHERITED_JAVA_VERSION = (
+    'openjdk version "21.0.11" 2026-04-21 LTS\n'
+    "OpenJDK Runtime Environment Corretto-21.0.11.10.1 "
+    "(build 21.0.11+10-LTS)\n"
+    "OpenJDK 64-Bit Server VM Corretto-21.0.11.10.1 "
+    "(build 21.0.11+10-LTS, mixed mode, sharing)"
+)
+INHERITED_SPARSE_RUNTIME = {
+    "protocol": "pyserini_1_5_0_sparse_jni_only_v1",
+    "java_home": "container:///opt/amazon-corretto-21",
+    "pyserini": "1.5.0",
+    "pyjnius": "1.7.0",
+    "anserini_jar_size": 163855488,
+    "anserini_jar_sha256": (
+        "bb0761df51ef7db5be361199a40a45722cccf7f0b2271e2b25337e97dd578aea"
+    ),
+    "installed_distributions": {
+        "pyjnius": {
+            "file_count": 16,
+            "total_size": 5970249,
+            "tree_sha256": (
+                "7f2411e7c3f6baf8eb75fc466e1f8be1720b9736bbd72d7700b21515ffab23c0"
+            ),
+        },
+        "pyserini": {
+            "file_count": 161,
+            "total_size": 165653249,
+            "tree_sha256": (
+                "c8a6c1ae730c19a91bd091f4a282b29008f3360396b5cda2431f0f712e3e4f56"
+            ),
+        },
+    },
+}
 EXPECTED_ENVIRONMENT = {
     "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
     "HF_HUB_OFFLINE": "1",
@@ -149,6 +212,196 @@ def _canonical_compact_bytes(value: object) -> bytes:
 
 def _sha256_bytes(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
+
+
+def _exact_dict(value: object, keys: set[str], *, name: str) -> dict[str, Any]:
+    if type(value) is not dict or set(value) != keys:
+        actual = sorted(value) if type(value) is dict else type(value).__name__
+        raise ValueError(f"{name} schema changed: {actual}")
+    return value
+
+
+def _validate_image_runtime_identity(
+    value: object,
+    *,
+    build_context_files_sha256: str,
+    build_context_identity_sha256: str,
+) -> dict[str, Any]:
+    identity = _exact_dict(
+        value,
+        {
+            "runtime_identity_protocol",
+            "base_image",
+            "build_context",
+            "image_contract_sha256",
+            "inherited_runtime",
+            "module_origins",
+            "platform",
+        },
+        name="image runtime identity",
+    )
+    normalized = json.loads(_canonical_json(identity))
+
+    def inspect(item: object, *, path: str) -> None:
+        if type(item) is dict:
+            for key, child in item.items():
+                if type(key) is not str or not key or key.strip() != key:
+                    raise ValueError(f"{path} contains an invalid key")
+                inspect(child, path=f"{path}.{key}")
+        elif type(item) is list:
+            for position, child in enumerate(item):
+                inspect(child, path=f"{path}[{position}]")
+        elif type(item) is str:
+            if item.startswith(("/", "file://")):
+                raise ValueError(f"{path} contains a local absolute path")
+        elif item is None or type(item) in {bool, int, float}:
+            return
+        else:
+            raise TypeError(f"{path} contains a non-JSON value")
+
+    inspect(normalized, path="image_runtime_identity")
+    if (
+        normalized["runtime_identity_protocol"]
+        != PORTABLE_RUNTIME_IDENTITY_PROTOCOL
+        or normalized["base_image"]
+        != {
+            "config_digest": BASE_IMAGE_CONFIG_DIGEST,
+            "digest": BASE_IMAGE_URI.rsplit("@", 1)[1],
+            "uri": BASE_IMAGE_URI,
+        }
+        or normalized["image_contract_sha256"] != FOLD_IMAGE_CONTRACT_SHA256
+        or normalized["platform"] != PLATFORM
+    ):
+        raise ValueError("Image runtime top-level identity changed")
+
+    build = _exact_dict(
+        normalized["build_context"],
+        {
+            "build_identity_sha256",
+            "files_sha256",
+            "source_parent_commit",
+            "source_parent_epoch",
+            "source_parent_rfc3339",
+            "toolchain",
+        },
+        name="image runtime build context",
+    )
+    epoch = build["source_parent_epoch"]
+    expected_rfc3339 = (
+        datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if type(epoch) is int and epoch > 0
+        else None
+    )
+    toolchain = _exact_dict(
+        build["toolchain"],
+        {"builder_driver", "buildkit_version", "buildx_version"},
+        name="image runtime toolchain",
+    )
+    if (
+        build["build_identity_sha256"] != build_context_identity_sha256
+        or build["files_sha256"] != build_context_files_sha256
+        or type(build["source_parent_commit"]) is not str
+        or _COMMIT_RE.fullmatch(build["source_parent_commit"]) is None
+        or expected_rfc3339 is None
+        or build["source_parent_rfc3339"] != expected_rfc3339
+        or toolchain["builder_driver"] != "docker"
+        or type(toolchain["buildkit_version"]) is not str
+        or _TOOL_VERSION_RE.fullmatch(toolchain["buildkit_version"]) is None
+        or type(toolchain["buildx_version"]) is not str
+        or _TOOL_VERSION_RE.fullmatch(toolchain["buildx_version"]) is None
+    ):
+        raise ValueError("Image runtime build-context identity changed")
+
+    inherited = _exact_dict(
+        normalized["inherited_runtime"],
+        {
+            "build_identity_sha256",
+            "files_sha256",
+            "image_contract_sha256",
+            "neural_runtime",
+            "sparse_runtime",
+        },
+        name="inherited runtime identity",
+    )
+    if (
+        inherited["build_identity_sha256"] != INHERITED_BUILD_IDENTITY_SHA256
+        or inherited["files_sha256"] != INHERITED_FILES_SHA256
+        or inherited["image_contract_sha256"]
+        != INHERITED_IMAGE_CONTRACT_SHA256
+    ):
+        raise ValueError("Inherited image identity changed")
+    neural = _exact_dict(
+        inherited["neural_runtime"],
+        {
+            "accelerate",
+            "cuda",
+            "flash-attn",
+            "huggingface-hub",
+            "numpy",
+            "packaging",
+            "python",
+            "safetensors",
+            "tokenizers",
+            "torch",
+            "torch_runtime",
+            "transformers",
+        },
+        name="inherited neural runtime",
+    )
+    if neural != INHERITED_NEURAL_RUNTIME:
+        raise ValueError("Inherited neural runtime version changed")
+    sparse = _exact_dict(
+        inherited["sparse_runtime"],
+        {
+            "protocol",
+            "java_home",
+            "java_version",
+            "pyserini",
+            "pyjnius",
+            "anserini_jar_size",
+            "anserini_jar_sha256",
+            "installed_distributions",
+        },
+        name="inherited sparse runtime",
+    )
+    java_version = sparse["java_version"]
+    sparse_without_java = {
+        key: child for key, child in sparse.items() if key != "java_version"
+    }
+    if (
+        type(java_version) is not str
+        or java_version != INHERITED_JAVA_VERSION
+        or _sha256_bytes(java_version.encode("utf-8"))
+        != INHERITED_JAVA_VERSION_OUTPUT_SHA256
+        or type(sparse["anserini_jar_size"]) is not int
+        or sparse_without_java != INHERITED_SPARSE_RUNTIME
+    ):
+        raise ValueError("Inherited sparse runtime identity changed")
+    distributions = _exact_dict(
+        sparse["installed_distributions"],
+        {"pyjnius", "pyserini"},
+        name="inherited installed distributions",
+    )
+    for name, raw in distributions.items():
+        record = _exact_dict(
+            raw,
+            {"file_count", "total_size", "tree_sha256"},
+            name=f"installed distribution {name}",
+        )
+        if (
+            type(record["file_count"]) is not int
+            or type(record["total_size"]) is not int
+        ):
+            raise ValueError(f"Installed distribution {name} identity changed")
+    if normalized["module_origins"] != {
+        "processing_fold_eval.archive_bridge": "processing_fold_eval/archive_bridge.py",
+        "retriever.artifacts": "retriever/artifacts.py",
+        "retriever.evaluator": "retriever/evaluator.py",
+        "retriever.provenance": "retriever/provenance.py",
+        "retriever.staged_data": "retriever/staged_data.py",
+    }:
+        raise ValueError("Portable module-origin identity changed")
+    return normalized
 
 
 def _validate_relative_path(value: object, *, name: str) -> str:
@@ -1236,6 +1489,7 @@ def build_frozen_image(
         "local_image_identity_sha256": _sha256_bytes(
             _canonical_json(local_image).encode("utf-8")
         ),
+        "image_runtime_identity": smoke,
         "offline_smoke_sha256": _sha256_bytes(
             _canonical_json(smoke).encode("utf-8")
         ),
@@ -1244,7 +1498,7 @@ def build_frozen_image(
 
 def validate_reproducible_builds(
     first: Mapping[str, object], second: Mapping[str, object]
-) -> dict[str, str]:
+) -> dict[str, object]:
     """Require independently built replicas to have one config and manifest."""
 
     required = {
@@ -1256,6 +1510,7 @@ def validate_reproducible_builds(
         "content_tag",
         "image_digest",
         "image_name",
+        "image_runtime_identity",
         "local_image_identity_sha256",
         "manifest_media_type",
         "offline_smoke_sha256",
@@ -1284,6 +1539,18 @@ def validate_reproducible_builds(
                 raise ValueError(f"{name} build receipt {field} is malformed")
         if value["manifest_media_type"] != DOCKER_MANIFEST_MEDIA_TYPE:
             raise ValueError(f"{name} build receipt media type changed")
+        runtime_identity = _validate_image_runtime_identity(
+            value["image_runtime_identity"],
+            build_context_files_sha256=value["build_context_files_sha256"],
+            build_context_identity_sha256=value[
+                "build_context_identity_sha256"
+            ],
+        )
+        if (
+            _sha256_bytes(_canonical_json(runtime_identity).encode("utf-8"))
+            != value["offline_smoke_sha256"]
+        ):
+            raise ValueError(f"{name} build receipt runtime identity changed")
         if value["content_tag"] != (
             "build-sha256-" + value["build_context_identity_sha256"]
         ):
@@ -1319,6 +1586,7 @@ def validate_reproducible_builds(
         "config_digest",
         "content_tag",
         "image_digest",
+        "image_runtime_identity",
         "local_image_identity_sha256",
         "manifest_media_type",
         "offline_smoke_sha256",
@@ -1332,6 +1600,9 @@ def validate_reproducible_builds(
         "build_context_identity_sha256": str(first["build_context_identity_sha256"]),
         "config_digest": str(first["config_digest"]),
         "image_digest": str(first["image_digest"]),
+        "image_runtime_identity": json.loads(
+            _canonical_json(first["image_runtime_identity"])
+        ),
         "local_image_identity_sha256": str(
             first["local_image_identity_sha256"]
         ),
