@@ -197,6 +197,31 @@ class RetrievalCvFoldEvaluationAwsTest(unittest.TestCase):
                     changed, account_id=ACCOUNT_ID, region=REGION
                 )
 
+    def test_phase2_execution_identity_binds_device_image_and_portable_runtime(
+        self,
+    ) -> None:
+        publication = _phase2_publication()
+        portable = publication["identity"]["image_runtime_identity"]
+        execution = phase2._phase2_execution_runtime_identity(
+            publication=publication
+        )
+        self.assertEqual(
+            execution,
+            {
+                "device": phase2.PHASE2_DEVICE,
+                "image_uri": publication["remote_digest_uri"],
+                **portable,
+            },
+        )
+
+        for reserved in ("device", "image_uri"):
+            changed = copy.deepcopy(publication)
+            changed["identity"]["image_runtime_identity"][reserved] = "splice"
+            with self.subTest(reserved=reserved), self.assertRaisesRegex(
+                ValueError, "reserved execution fields"
+            ):
+                phase2._phase2_execution_runtime_identity(publication=changed)
+
     def test_validate_context_keeps_phase1_and_phase2_publications_disjoint(
         self,
     ) -> None:
@@ -381,8 +406,19 @@ class RetrievalCvFoldEvaluationAwsTest(unittest.TestCase):
                 "--output-dir",
                 "/opt/ml/processing/output/evaluation",
                 "--device",
-                "cuda:0",
+                phase2.PHASE2_DEVICE,
             ],
+        )
+        execution = phase2._phase2_execution_runtime_identity(
+            publication=publication
+        )
+        self.assertEqual(
+            request["AppSpecification"]["ContainerArguments"][-1],
+            execution["device"],
+        )
+        self.assertEqual(
+            request["AppSpecification"]["ImageUri"],
+            execution["image_uri"],
         )
         self.assertEqual(
             request["AppSpecification"]["ContainerEntrypoint"],

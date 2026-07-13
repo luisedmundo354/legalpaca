@@ -451,6 +451,9 @@ sequence:
 7. `phase2-controls` copies the four frozen controls and generates the exact
    evaluation plan and local bindings. It explicitly binds the original
    Phase-1 image receipt and the distinct corrected Phase-2 image receipt.
+   The plan extends the portable published-image identity with the same fixed
+   `cuda:0` device and digest-addressed image URI used by the Processing
+   request, so the in-container execution identity is fully precommitted.
 8. `phase2-stage-controls` writes the six controls once under a new versioned
    S3 prefix. `storage-proof` accounts for all six files, every controlled
    artifact extraction, the measured BM25 allocation, output reserve, and

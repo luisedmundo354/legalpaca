@@ -69,6 +69,7 @@ PHASE2_TERMINAL_PROTOCOL = "retrieval_cv_fold_evaluation_terminal_v1"
 PHASE2_ACQUISITION_PROTOCOL = "retrieval_cv_fold_evaluation_acquisition_v1"
 PHASE2_CONTROL_MANIFEST_NAME = "phase2_control_staging_manifest.json"
 PHASE2_PROCESSING_MAX_RUNTIME_SECONDS = 86_400
+PHASE2_DEVICE = "cuda:0"
 PHASE2_OVERLAY_PUBLICATION_PROTOCOL = (
     "immutable_ecr_fold_phase2_evaluation_image_publication_v1"
 )
@@ -543,13 +544,34 @@ def _baseline_systems() -> list[dict[str, Any]]:
     ]
 
 
+def _phase2_execution_runtime_identity(
+    *, publication: Mapping[str, Any]
+) -> dict[str, Any]:
+    portable = publication["identity"]["image_runtime_identity"]
+    if type(portable) is not dict or not portable:
+        raise ValueError("Phase-2 portable image runtime identity is invalid")
+    reserved = {"device", "image_uri"}.intersection(portable)
+    if reserved:
+        raise ValueError(
+            "Phase-2 portable image runtime identity contains reserved execution "
+            f"fields: {sorted(reserved)}"
+        )
+    image_uri = publication["remote_digest_uri"]
+    if type(image_uri) is not str or not image_uri:
+        raise ValueError("Phase-2 execution image URI is invalid")
+    return {
+        "device": PHASE2_DEVICE,
+        "image_uri": image_uri,
+        **copy.deepcopy(portable),
+    }
+
+
 def _render_controls(
     *,
     completed: Mapping[str, Any],
     publication: Mapping[str, Any],
     archive_inventory: Mapping[str, Any],
     bm25_storage: Mapping[str, Any],
-    runtime_identity: Mapping[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     source = completed["source_bundle"]
     controlled: list[dict[str, Any]] = []
@@ -620,7 +642,9 @@ def _render_controls(
         "e5_max_len_passage": 500,
         "query_batch_size": 4,
         "passage_batch_size": 38,
-        "runtime_identity": copy.deepcopy(dict(runtime_identity)),
+        "runtime_identity": _phase2_execution_runtime_identity(
+            publication=publication
+        ),
         "systems": systems,
     }
     plan_sha256 = hashlib.sha256(_canonical_bytes(plan)).hexdigest()
@@ -807,7 +831,6 @@ def _validate_phase2_control_content(
         publication=phase2_publication,
         archive_inventory=inventory,
         bm25_storage=storage,
-        runtime_identity=phase2_publication["identity"]["image_runtime_identity"],
     )
     expected_generated = {
         "evaluation_plan.json": _canonical_bytes(expected_plan),
@@ -886,15 +909,11 @@ def build_phase2_control_bundle(
         archive_copy=archive,
         completed=completed,
     )
-    runtime_identity = copy.deepcopy(
-        phase2_publication["identity"]["image_runtime_identity"]
-    )
     plan, bindings = _render_controls(
         completed=completed,
         publication=phase2_publication,
         archive_inventory=inventory,
         bm25_storage=storage,
-        runtime_identity=runtime_identity,
     )
     static_control = phase1._static_asset(static, "control")
     static_root = phase1._real_directory(
@@ -1506,7 +1525,7 @@ def _render_phase2_request(
                 "--output-dir",
                 "/opt/ml/processing/output/evaluation",
                 "--device",
-                "cuda:0",
+                PHASE2_DEVICE,
             ],
             "ContainerEntrypoint": [
                 "/opt/conda/bin/python",

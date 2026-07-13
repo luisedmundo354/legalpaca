@@ -990,6 +990,53 @@ class CompleteEvaluationPlanTest(unittest.TestCase):
                 )
                 for position in range(1, controlled_count)
             ]
+            runtime_identity_mutations = (
+                (
+                    "missing device",
+                    lambda value: value["runtime_identity"].pop("device"),
+                ),
+                (
+                    "altered image URI",
+                    lambda value: value["runtime_identity"].__setitem__(
+                        "image_uri", "wrong-image-uri"
+                    ),
+                ),
+            )
+            for label, mutate in runtime_identity_mutations:
+                changed_plan = copy.deepcopy(plan)
+                mutate(changed_plan)
+                plan_path.write_bytes(_canonical_bytes(changed_plan))
+                runtime_import = mock.Mock()
+                with (
+                    self.subTest(label=label),
+                    mock.patch(
+                        "retriever.evaluator.PROCESSING_JOB_CONFIG_PATH",
+                        processing_config_path,
+                    ),
+                    mock.patch(
+                        "processing_eval.image_smoke.validate_image_runtime",
+                        return_value=image_runtime,
+                    ),
+                    mock.patch(
+                        "retriever.artifacts.import_pinned_artifact_runtime",
+                        runtime_import,
+                    ),
+                    mock.patch(
+                        "retriever.bm25.build_and_score_bm25"
+                    ) as bm25_scorer,
+                    self.assertRaisesRegex(
+                        RuntimeError, "Actual Processing runtime differs"
+                    ),
+                ):
+                    run_complete_evaluation_plan(
+                        evaluation_plan_path=plan_path,
+                        local_bindings_path=bindings_path,
+                        output_dir=output_dir,
+                        device="cpu",
+                    )
+                runtime_import.assert_not_called()
+                bm25_scorer.assert_not_called()
+            plan_path.write_bytes(_canonical_bytes(plan))
             with (
                 mock.patch.dict(
                     os.environ,
