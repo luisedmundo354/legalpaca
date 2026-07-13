@@ -266,10 +266,13 @@ Step-2-frozen experiment specification.
   and five ModernBERT snapshot files under previously unused versioned
   prefixes; records every VersionId, ETag, size, SHA-256, and SSE setting; and
   rejects delete markers, extra versions, or non-current objects. It renders a
-  controlled CreateTrainingJob request only from one validated plan cell and
-  the matching staging receipt. The pinned training-toolkit 5.0.0 mapping is
-  explicit: scientific snake_case plan keys become the hyphenated strict CLI
-  flags consumed by the image-baked bootstrap and then by train_sm.py. The
+  controlled CreateTrainingJob request or one of the two sealed determinism
+  smoke requests only from a validated plan cell and the matching staging
+  receipt. The smoke renderer proves replicas A and B differ only in job name,
+  output prefix, and the toolkit's duplicated job-name field. The pinned
+  training-toolkit 5.0.0 mapping is explicit: scientific snake_case plan keys
+  become the hyphenated strict CLI flags consumed by the image-baked bootstrap
+  and then by train_sm.py. The
   request uses three slash-bounded File-mode channels (`base_model`, `data`,
   and `source`) under network isolation. Every MPI rank verifies the mounted
   source archive and its normalized inventory before safe rank-local extraction;
@@ -283,6 +286,15 @@ Step-2-frozen experiment specification.
   local and complete evaluation-plan schemas are versions 2 and 3 respectively,
   and each plan requires one common plan hash, staging-receipt hash, and source
   bundle across all of its controlled systems.
+- The separate `determinism_smoke` path is sealed to structured,
+  global-uniform, fold 0, seed 17, two epochs, and six optimizer updates. It
+  records canonical initial/last/selected model-state identities, all 588
+  candidate links, all 152 rank/microbatch loss records with exact float32 bit
+  patterns, both validation decisions, the verified reload, and final artifact
+  identities. `retriever/determinism_artifacts.py` independently parses the
+  safetensors bytes and recomputes the selected state. `determinism_gate.py`
+  validates both externally identified artifacts and rejects any scientific
+  mismatch without a tolerance. Neither module submits a job.
 - aggregate.py performs only strict five-fold completeness and artifact
   readback. Statistical aggregation, intervals, contrasts, and figures remain
   Step 12.
@@ -291,12 +303,12 @@ The committed Step-9 training manifest is deliberately
 `retrieval_cv_training_plan`, not a launch manifest. It is hard-blocked and
 cannot be submitted. This implementation commit adds derived/base/runtime
 image provenance to controlled artifacts and the exact controlled request and
-staging renderer, but it intentionally does not make the old plan submittable:
-the separate 2-epoch/6-update determinism entry point and validator and the
-corrected-data legacy-style diagnostic still need their own strict entry
-points, artifact protocols, and request schemas. After those implementations
-are committed, a later source-freeze commit must repin the source commit/tree,
-rebuild the plan, clear only genuinely discharged blockers, and add remote
+staging renderer and the strict 2-epoch/6-update determinism path, but it
+intentionally does not make the old plan submittable: the corrected-data
+legacy-style diagnostic still needs its own strict entry point, artifact
+protocol, and request schema. After that implementation is committed, a later
+source-freeze commit must repin the source commit/tree, rebuild the plan, clear
+only genuinely discharged blockers, and add remote
 preflight/re-render/Describe verification before any submission is exposed.
 These are explicit implementation gates, not implicit behavior or fallbacks.
 The immediate Processing runtime smoke is independent of this blocked plan.

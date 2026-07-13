@@ -46,6 +46,11 @@ EXPECTED_MODEL_SELECTION_PRIMARY = "validation_case_macro_set_recall_at_20"
 EXPECTED_MODEL_SELECTION_SECONDARY = (
     "validation_case_macro_first_gold_reciprocal_rank_full_ranking"
 )
+CONTROLLED_FULL_RUN_KIND = "controlled_full"
+DETERMINISM_SMOKE_RUN_KIND = "determinism_smoke"
+DETERMINISM_SMOKE_MODEL_ARTIFACT_PROTOCOL = (
+    "determinism_smoke_selected_bf16_safetensors_v1"
+)
 
 
 def _exact_json_equal(actual: object, expected: object) -> bool:
@@ -83,6 +88,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--query-view", choices=CONTROLLED_QUERY_VIEWS, required=True)
     parser.add_argument("--sampler", choices=CONTROLLED_SAMPLERS, required=True)
     parser.add_argument("--experiment-seed", type=int, choices=CONTROLLED_SEEDS, required=True)
+    parser.add_argument(
+        "--run-kind",
+        choices=(CONTROLLED_FULL_RUN_KIND, DETERMINISM_SMOKE_RUN_KIND),
+        default=CONTROLLED_FULL_RUN_KIND,
+    )
+    parser.add_argument("--epochs", type=int)
+    parser.add_argument("--total-optimizer-updates", type=int)
     args = parser.parse_args(argv)
 
     for field in ("data_dir", "base_model_dir", "output_dir"):
@@ -90,6 +102,29 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             parser.error(
                 f"--{field.replace('_', '-')} is required, either explicitly or through its exact "
                 "SageMaker channel/output environment variable"
+            )
+    if args.run_kind == CONTROLLED_FULL_RUN_KIND:
+        if args.epochs is not None or args.total_optimizer_updates is not None:
+            parser.error(
+                "controlled_full forbids schedule overrides; it is exactly 20 epochs/60 updates"
+            )
+        args.epochs = 20
+        args.total_optimizer_updates = 60
+    else:
+        if args.epochs != 2 or args.total_optimizer_updates != 6:
+            parser.error(
+                "determinism_smoke requires exactly --epochs 2 "
+                "--total-optimizer-updates 6"
+            )
+        if (
+            args.outer_fold != 0
+            or args.query_view != "structured"
+            or args.sampler != SAMPLER_GLOBAL_UNIFORM
+            or args.experiment_seed != 17
+        ):
+            parser.error(
+                "determinism_smoke is sealed to fold 0, structured, "
+                "global_uniform, seed 17"
             )
     return args
 
@@ -109,6 +144,18 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _canonical_payload_sha256(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def _artifact_file_record(path: Path, *, logical_path: str) -> dict[str, Any]:
@@ -263,29 +310,9 @@ def _publish_pretrained_directory(
 
 
 def _validate_gathered_bf16_state_dict(state_dict: object, torch_module) -> Mapping[str, Any]:
-    if not isinstance(state_dict, Mapping) or not state_dict:
-        raise RuntimeError("Rank zero did not receive a non-empty gathered model state")
-    keys = list(state_dict)
-    if any(type(key) is not str or not key for key in keys) or len(keys) != len(set(keys)):
-        raise RuntimeError("Gathered model state has invalid parameter names")
-    floating_count = 0
-    for key in keys:
-        tensor = state_dict[key]
-        if not torch_module.is_tensor(tensor):
-            raise TypeError(f"Gathered model state {key!r} is not a tensor")
-        if tensor.device.type != "cpu":
-            raise RuntimeError(f"Gathered model state {key!r} was not offloaded to CPU")
-        if tensor.is_floating_point():
-            floating_count += 1
-            if tensor.dtype != torch_module.bfloat16:
-                raise RuntimeError(
-                    f"Gathered model state {key!r} has dtype={tensor.dtype}; expected BF16"
-                )
-            if not torch_module.isfinite(tensor).all():
-                raise FloatingPointError(f"Gathered model state {key!r} is non-finite")
-    if floating_count < 1:
-        raise RuntimeError("Gathered model state contains no floating-point tensors")
-    return state_dict
+    from retriever.determinism import validate_gathered_bf16_model_state
+
+    return validate_gathered_bf16_model_state(state_dict, torch_module)
 
 
 def _require_models_bitwise_equal(first, second, torch_module) -> int:
@@ -875,6 +902,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         retained_checkpoint_inventory,
     )
     from retriever.data import PassageIndexTable, load_candidates_by_case, load_corpus, load_queries
+    from retriever.determinism import (
+        build_smoke_scientific_evidence,
+        canonical_model_state_identity,
+    )
     from retriever.evaluation import (
         VALIDATION_FORWARD_STEPS,
         VALIDATION_MAX_LEN_PASSAGE,
@@ -888,7 +919,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     from retriever.markup import SLOT_TOKEN, all_markup_tokens
     from retriever.models import DualEncoderRetriever
     from retriever.sampling import ControlledRetrievalTrainDataset
-    from trainer import ControlledRetrievalTrainer
+    from trainer import (
+        ControlledRetrievalTrainer,
+        DeterminismSmokeRetrievalTrainer,
+    )
 
     local_rank, rank, world_size = _configure_distributed_environment(torch)
     _configure_determinism(
@@ -1029,7 +1063,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     training_args = TrainingArguments(
         output_dir=str(args.output_dir),
-        num_train_epochs=experiment["training"]["epochs"],
+        num_train_epochs=args.epochs,
         per_device_train_batch_size=experiment["training"]["batch_size_queries_per_gpu"],
         learning_rate=experiment["training"]["learning_rate"],
         warmup_ratio=experiment["training"]["warmup_ratio"],
@@ -1073,7 +1107,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             "use_seedable_sampler": False,
         },
     )
-    trainer = ControlledRetrievalTrainer(
+    trainer_class = (
+        ControlledRetrievalTrainer
+        if args.run_kind == CONTROLLED_FULL_RUN_KIND
+        else DeterminismSmokeRetrievalTrainer
+    )
+    trainer = trainer_class(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
@@ -1103,16 +1142,37 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "world_size": world_size,
                     "runtime_versions": EXPECTED_RUNTIME_VERSIONS,
                     "snapshot_tree_sha256": snapshot_manifest["tree_sha256"],
+                    **(
+                        {
+                            "run_kind": args.run_kind,
+                            "epochs": args.epochs,
+                            "total_optimizer_updates": args.total_optimizer_updates,
+                        }
+                        if args.run_kind == DETERMINISM_SMOKE_RUN_KIND
+                        else {}
+                    ),
                     "passage_index_sha256": passage_index_table.sha256,
                 },
                 sort_keys=True,
             )
         )
     trainer.train()
-    if trainer.state.global_step != 60 or float(trainer.state.epoch) != 20.0:
+    if (
+        trainer.state.global_step != args.total_optimizer_updates
+        or float(trainer.state.epoch) != float(args.epochs)
+    ):
         raise RuntimeError(
-            "Controlled training did not complete the exact 20-epoch/60-update schedule"
+            "Controlled training did not complete its exact sealed schedule: "
+            f"run_kind={args.run_kind}, epoch={trainer.state.epoch}, "
+            f"global_step={trainer.state.global_step}"
         )
+    smoke_initial_model_state = None
+    smoke_last_model_state = None
+    smoke_loss_package = None
+    if args.run_kind == DETERMINISM_SMOKE_RUN_KIND:
+        smoke_initial_model_state = trainer.smoke_initial_model_state
+        smoke_last_model_state = trainer.capture_smoke_last_model_state()
+        smoke_loss_package = trainer.finalize_smoke_loss_traces()
     trace_manifest = trainer.finalize_sampling_traces()
     checkpoint_history = trainer.finalize_checkpoint_selection()
 
@@ -1220,6 +1280,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     def publish_final_artifacts() -> dict[str, Any]:
         exact_state = _validate_gathered_bf16_state_dict(gathered_state, torch)
+        selected_model_state = (
+            canonical_model_state_identity(exact_state, torch)
+            if args.run_kind == DETERMINISM_SMOKE_RUN_KIND
+            else None
+        )
         cpu_tokenizer = AutoTokenizer.from_pretrained(
             str(args.base_model_dir),
             use_fast=True,
@@ -1294,6 +1359,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         if round_trip_tensor_count != gathered_tensor_count:
             raise RuntimeError("Safetensors round trip changed the model state inventory")
+        roundtrip_model_state = (
+            canonical_model_state_identity(reloaded_cpu_model.state_dict(), torch)
+            if args.run_kind == DETERMINISM_SMOKE_RUN_KIND
+            else None
+        )
+        if (
+            args.run_kind == DETERMINISM_SMOKE_RUN_KIND
+            and selected_model_state != roundtrip_model_state
+        ):
+            raise RuntimeError(
+                "Smoke selected gathered state and strict safetensors round trip differ"
+            )
 
         tokenizer_record = _publish_pretrained_directory(
             args.output_dir / "tokenizer",
@@ -1321,7 +1398,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             "temperature": experiment["training"]["temperature"],
             "tokenizer_size": len(cpu_tokenizer),
             "weight_dtype": "bfloat16",
-            "model_artifact_protocol": runtime_control["final_model_artifact"],
+            "model_artifact_protocol": (
+                runtime_control["final_model_artifact"]
+                if args.run_kind == CONTROLLED_FULL_RUN_KIND
+                else DETERMINISM_SMOKE_MODEL_ARTIFACT_PROTOCOL
+            ),
         }
         wrapper_path = args.output_dir / "wrapper_config.json"
         publish_new_text(
@@ -1347,6 +1428,183 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         trace_manifest_path = args.output_dir / "candidate_traces/manifest.json"
         validation_manifest_path = args.output_dir / "validation/manifest.json"
+        smoke_loss_record = None
+        smoke_evidence = None
+        if args.run_kind == DETERMINISM_SMOKE_RUN_KIND:
+            if (
+                type(smoke_loss_package) is not dict
+                or set(smoke_loss_package) != {"identity", "per_rank_records"}
+                or type(smoke_loss_package["per_rank_records"]) is not list
+                or len(smoke_loss_package["per_rank_records"]) != 4
+            ):
+                raise RuntimeError("Smoke loss package is malformed at publication")
+
+            def write_smoke_loss_traces(path: Path) -> None:
+                shard_records = []
+                for rank_index, records in enumerate(
+                    smoke_loss_package["per_rank_records"]
+                ):
+                    shard_path = path / f"rank-{rank_index:05d}.jsonl"
+                    content = "".join(
+                        json.dumps(
+                            record,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            allow_nan=False,
+                        )
+                        + "\n"
+                        for record in records
+                    )
+                    with shard_path.open("x", encoding="utf-8", newline="\n") as stream:
+                        stream.write(content)
+                    shard_records.append(
+                        {
+                            "rank": rank_index,
+                            "path": shard_path.name,
+                            "record_count": len(records),
+                            "size": shard_path.stat().st_size,
+                            "sha256": _sha256(shard_path),
+                        }
+                    )
+                manifest_payload = {
+                    "schema_version": 1,
+                    "identity": smoke_loss_package["identity"],
+                    "shards": shard_records,
+                }
+                manifest_path = path / "manifest.json"
+                with manifest_path.open("x", encoding="utf-8", newline="\n") as stream:
+                    stream.write(
+                        json.dumps(
+                            manifest_payload,
+                            ensure_ascii=False,
+                            indent=2,
+                            sort_keys=True,
+                            allow_nan=False,
+                        )
+                        + "\n"
+                    )
+
+            smoke_loss_record = _publish_pretrained_directory(
+                args.output_dir / "loss_traces",
+                write_smoke_loss_traces,
+            )
+            smoke_loss_manifest_path = args.output_dir / "loss_traces/manifest.json"
+            validation_records = []
+            for epoch_number in (1, 2):
+                epoch_path = args.output_dir / f"validation/epoch-{epoch_number:03d}.json"
+                epoch_payload = _load_json_object(
+                    epoch_path,
+                    name=f"Smoke validation epoch {epoch_number}",
+                )
+                expected_keys = {
+                    "schema_version",
+                    "epoch",
+                    "global_step",
+                    "checkpoint",
+                    "candidate",
+                    "is_new_best",
+                    "best_after_epoch",
+                    "validation_result",
+                }
+                if set(epoch_payload) != expected_keys:
+                    raise RuntimeError("Smoke validation epoch schema changed")
+                validation_records.append(
+                    {
+                        key: epoch_payload[key]
+                        for key in (
+                            "schema_version",
+                            "epoch",
+                            "global_step",
+                            "candidate",
+                            "is_new_best",
+                            "best_after_epoch",
+                            "validation_result",
+                        )
+                    }
+                )
+            validation_selection = {
+                "epochs": 2,
+                "sha256": _canonical_payload_sha256(
+                    {
+                        "records": validation_records,
+                        "best": checkpoint_history["best"],
+                        "last": checkpoint_history["last"],
+                    }
+                ),
+            }
+            candidate_identity = {
+                "manifest_sha256": _sha256(trace_manifest_path),
+                "merged_sha256": trace_manifest["merged"]["sha256"],
+                "record_count": trace_manifest["record_count"],
+                "rank_shards": [
+                    {
+                        "rank": record["rank"],
+                        "record_count": record["record_count"],
+                        "sha256": record["sha256"],
+                    }
+                    for record in trace_manifest["shards"]
+                ],
+            }
+            reload_identity = {
+                "validation_sha256": _canonical_payload_sha256(
+                    best_reload["validation_result"]
+                ),
+                "scheduler_state_sha256": reload_records[0][
+                    "scheduler_state_sha256"
+                ],
+                "client_state_sha256": reload_records[0]["client_state_sha256"],
+                "per_rank_rng_sha256": [
+                    record["rng_sha256"] for record in reload_records
+                ],
+            }
+            launch_ledger = {
+                "training_image": EXPECTED_DERIVED_TRAINING_IMAGE,
+                "training_base_image": EXPECTED_BASE_TRAINING_IMAGE,
+                "runtime_inventory_sha256": (
+                    EXPECTED_DERIVED_TRAINING_IMAGE_RUNTIME_INVENTORY_SHA256
+                ),
+                "training_image_contract_sha256": training_launch_provenance[
+                    "training_image_contract_sha256"
+                ],
+                "bootstrap_protocol": training_launch_provenance[
+                    "bootstrap_protocol"
+                ],
+                "training_plan_sha256": training_launch_provenance[
+                    "training_plan_sha256"
+                ],
+                "training_staging_receipt_sha256": training_launch_provenance[
+                    "training_staging_receipt_sha256"
+                ],
+                "source_bundle": training_launch_provenance["source_bundle"],
+            }
+            smoke_evidence = build_smoke_scientific_evidence(
+                initial_model_state=smoke_initial_model_state,
+                last_model_state=smoke_last_model_state,
+                selected_model_state=selected_model_state,
+                roundtrip_model_state=roundtrip_model_state,
+                candidate_traces=candidate_identity,
+                loss_traces=smoke_loss_package["identity"],
+                validation_selection=validation_selection,
+                reload=reload_identity,
+                final_artifacts={
+                    "model_sha256": model_record["sha256"],
+                    "tokenizer_inventory_sha256": _canonical_payload_sha256(
+                        tokenizer_record["files"]
+                    ),
+                    "encoder_config_sha256": _canonical_payload_sha256(
+                        encoder_config_record["files"]
+                    ),
+                    "wrapper_config_sha256": wrapper_record["sha256"],
+                },
+                launch_ledger={"sha256": _canonical_payload_sha256(launch_ledger)},
+            )
+            if _sha256(smoke_loss_manifest_path) != next(
+                record["sha256"]
+                for record in smoke_loss_record["files"]
+                if record["path"] == "manifest.json"
+            ):
+                raise RuntimeError("Smoke loss manifest inventory changed")
         run_record = {
             "schema_version": 1,
             "experiment_id": experiment["experiment_id"],
@@ -1443,7 +1701,31 @@ def main(argv: Sequence[str] | None = None) -> int:
             "wrapper_config": wrapper_record,
             "retained_checkpoints": retained_inventory,
         }
-        run_path = args.output_dir / "controlled_run.json"
+        if args.run_kind == DETERMINISM_SMOKE_RUN_KIND:
+            run_record.update(
+                {
+                    "run_kind": DETERMINISM_SMOKE_RUN_KIND,
+                    "schedule": {
+                        "epochs": 2,
+                        "updates_per_epoch": 3,
+                        "total_optimizer_updates": 6,
+                    },
+                    "loss_traces": {
+                        "manifest_path": "loss_traces/manifest.json",
+                        "manifest_sha256": _sha256(
+                            args.output_dir / "loss_traces/manifest.json"
+                        ),
+                        "identity": smoke_loss_package["identity"],
+                    },
+                    "determinism_scientific_evidence": smoke_evidence,
+                }
+            )
+        run_name = (
+            "controlled_run.json"
+            if args.run_kind == CONTROLLED_FULL_RUN_KIND
+            else "determinism_smoke_run.json"
+        )
+        run_path = args.output_dir / run_name
         publish_new_text(
             run_path,
             json.dumps(
@@ -1469,8 +1751,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             "tokenizer",
             "encoder_config",
             "wrapper_config.json",
-            "controlled_run.json",
+            run_name,
         }
+        if args.run_kind == DETERMINISM_SMOKE_RUN_KIND:
+            expected_top_level.add("loss_traces")
         actual_top_level = {entry.name for entry in args.output_dir.iterdir()}
         if actual_top_level != expected_top_level or any(
             entry.is_symlink() for entry in args.output_dir.iterdir()
@@ -1482,7 +1766,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         artifact_manifest = {
             "schema_version": 1,
             "commit_marker": True,
-            "controlled_run": run_file_record,
             "model": model_record,
             "tokenizer": tokenizer_record,
             "encoder_config": encoder_config_record,
@@ -1497,6 +1780,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             ),
             "retained_checkpoints": retained_inventory,
         }
+        if args.run_kind == CONTROLLED_FULL_RUN_KIND:
+            artifact_manifest["controlled_run"] = run_file_record
+        else:
+            artifact_manifest.update(
+                {
+                    "artifact_type": "determinism_smoke_retriever",
+                    "determinism_smoke_run": run_file_record,
+                    "loss_trace_manifest": _artifact_file_record(
+                        args.output_dir / "loss_traces/manifest.json",
+                        logical_path="loss_traces/manifest.json",
+                    ),
+                }
+            )
         artifact_manifest_path = args.output_dir / "artifact_manifest.json"
         publish_new_text(
             artifact_manifest_path,
@@ -1518,11 +1814,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             artifact_manifest_sha256 = _sha256(artifact_manifest_path)
             if json.loads(artifact_manifest_path.read_text(encoding="utf-8")) != artifact_manifest:
                 raise RuntimeError("Artifact commit marker readback changed its canonical payload")
-            return {
+            result = {
                 "artifact_manifest_sha256": artifact_manifest_sha256,
-                "controlled_run_sha256": run_file_record["sha256"],
                 "model_sha256": model_record["sha256"],
             }
+            result[
+                "controlled_run_sha256"
+                if args.run_kind == CONTROLLED_FULL_RUN_KIND
+                else "determinism_smoke_run_sha256"
+            ] = run_file_record["sha256"]
+            return result
         except BaseException:
             if artifact_manifest_path.exists() or artifact_manifest_path.is_symlink():
                 artifact_manifest_path.unlink()
@@ -1533,15 +1834,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         "Final controlled artifact publication",
         publish_final_artifacts,
     )
-    if (
-        type(final_artifacts) is not dict
-        or set(final_artifacts)
-        != {
-            "artifact_manifest_sha256",
-            "controlled_run_sha256",
-            "model_sha256",
-        }
-    ):
+    expected_final_keys = {
+        "artifact_manifest_sha256",
+        "model_sha256",
+        (
+            "controlled_run_sha256"
+            if args.run_kind == CONTROLLED_FULL_RUN_KIND
+            else "determinism_smoke_run_sha256"
+        ),
+    }
+    if type(final_artifacts) is not dict or set(final_artifacts) != expected_final_keys:
         raise RuntimeError("Final artifact publication returned malformed metadata")
     accelerator.end_training()
     return 0

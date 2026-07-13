@@ -22,12 +22,22 @@ from retriever.checkpointing import (
     VALIDATION_SECONDARY_METRIC as CHECKPOINT_VALIDATION_SECONDARY_METRIC,
     ValidationMetadataStore,
     canonical_json,
+    canonical_state_sha256,
+    capture_rng_state,
     choose_better_checkpoint,
     load_controlled_checkpoint,
     retain_best_and_last_checkpoints,
     save_controlled_checkpoint,
 )
 from retriever.data import PassageIndexTable
+from retriever.determinism import (
+    SMOKE_MICROBATCHES_PER_RANK_PER_EPOCH,
+    SMOKE_WORLD_SIZE,
+    build_smoke_loss_trace_identity,
+    build_smoke_microbatch_loss_record,
+    canonical_model_state_identity,
+    validate_gathered_bf16_model_state,
+)
 from retriever.distributed import build_global_candidate_plan, gather_owned_embeddings
 from legacy_eval.trainer_eval import evaluate_retrieval
 from retriever.evaluation import (
@@ -45,6 +55,44 @@ from retriever.losses import (
     multi_positive_nce_loss,
 )
 from retriever.traces import CandidateTraceStore
+
+
+@dataclass(frozen=True)
+class ControlledTrainingSchedule:
+    run_kind: str
+    epochs: int
+    updates_per_epoch: int
+    total_optimizer_updates: int
+
+    def __post_init__(self) -> None:
+        expected = {
+            "controlled_full": (20, 3, 60),
+            "determinism_smoke": (2, 3, 6),
+        }
+        if type(self.run_kind) is not str or self.run_kind not in expected:
+            raise ValueError("Controlled training schedule run_kind changed")
+        actual = (self.epochs, self.updates_per_epoch, self.total_optimizer_updates)
+        if any(type(value) is not int for value in actual) or actual != expected[
+            self.run_kind
+        ]:
+            raise ValueError(
+                f"Controlled training schedule changed for {self.run_kind}: "
+                f"actual={actual}, expected={expected[self.run_kind]}"
+            )
+
+
+FULL_CONTROLLED_TRAINING_SCHEDULE = ControlledTrainingSchedule(
+    run_kind="controlled_full",
+    epochs=20,
+    updates_per_epoch=3,
+    total_optimizer_updates=60,
+)
+DETERMINISM_SMOKE_TRAINING_SCHEDULE = ControlledTrainingSchedule(
+    run_kind="determinism_smoke",
+    epochs=2,
+    updates_per_epoch=3,
+    total_optimizer_updates=6,
+)
 
 
 def _coordinated_local_operation(context: str, operation):
@@ -289,6 +337,9 @@ class ControlledRetrievalTrainer(MultiPositiveContrastiveTrainer):
         passage_index_table: PassageIndexTable,
         validation_data: FoldGlobalValidationData,
         max_len_passage: int,
+        training_schedule: ControlledTrainingSchedule = (
+            FULL_CONTROLLED_TRAINING_SCHEDULE
+        ),
         **kwargs: Any,
     ) -> None:
         if type(experiment_seed) is not int or experiment_seed < 0:
@@ -302,6 +353,8 @@ class ControlledRetrievalTrainer(MultiPositiveContrastiveTrainer):
             )
         if type(max_len_passage) is not int or max_len_passage != 500:
             raise RuntimeError("Controlled max passage length must be the frozen exact value 500")
+        if not isinstance(training_schedule, ControlledTrainingSchedule):
+            raise TypeError("training_schedule must be ControlledTrainingSchedule")
         if (
             CHECKPOINT_VALIDATION_PRIMARY_METRIC != VALIDATION_PRIMARY_METRIC
             or CHECKPOINT_VALIDATION_SECONDARY_METRIC != VALIDATION_SECONDARY_METRIC
@@ -319,6 +372,7 @@ class ControlledRetrievalTrainer(MultiPositiveContrastiveTrainer):
         self.passage_index_table = passage_index_table
         self.validation_data = validation_data
         self.max_len_passage = max_len_passage
+        self.training_schedule = training_schedule
         self._global_batch_sampler: GlobalQueryBatchSampler | None = None
         self._window_epoch: int | None = None
         self._window_index = 0
@@ -386,7 +440,7 @@ class ControlledRetrievalTrainer(MultiPositiveContrastiveTrainer):
         )
         self._validation_metadata_store = ValidationMetadataStore(
             Path(self.args.output_dir),
-            expected_epochs=self.EXPECTED_EPOCHS,
+            expected_epochs=self.training_schedule.epochs,
         )
 
     def get_train_dataloader(self) -> DataLoader:
@@ -500,9 +554,14 @@ class ControlledRetrievalTrainer(MultiPositiveContrastiveTrainer):
 
     def set_initial_training_values(self, args, dataloader, total_train_batch_size: int):
         if args.max_steps >= 0:
-            raise RuntimeError("Controlled retrieval forbids max_steps; use exactly 20 complete epochs")
-        if float(args.num_train_epochs) != float(self.EXPECTED_EPOCHS):
-            raise RuntimeError(f"Controlled retrieval requires exactly {self.EXPECTED_EPOCHS} epochs")
+            raise RuntimeError(
+                "Controlled retrieval forbids max_steps; use the exact sealed epoch schedule"
+            )
+        if float(args.num_train_epochs) != float(self.training_schedule.epochs):
+            raise RuntimeError(
+                "Controlled retrieval epoch schedule changed: "
+                f"actual={args.num_train_epochs}, expected={self.training_schedule.epochs}"
+            )
         if len(dataloader) != self.EXPECTED_PREPARED_BATCHES:
             raise RuntimeError("Controlled prepared dataloader length changed before scheduling")
         if total_train_batch_size != 128:
@@ -515,13 +574,13 @@ class ControlledRetrievalTrainer(MultiPositiveContrastiveTrainer):
                 f"Trainer reports {num_examples} examples; expected {self.EXPECTED_QUERIES}"
             )
         return (
-            self.EXPECTED_EPOCHS,
-            self.EXPECTED_UPDATES_PER_EPOCH,
+            self.training_schedule.epochs,
+            self.training_schedule.updates_per_epoch,
             self.EXPECTED_QUERIES,
-            self.EXPECTED_QUERIES * self.EXPECTED_EPOCHS,
+            self.EXPECTED_QUERIES * self.training_schedule.epochs,
             True,
             self.EXPECTED_PREPARED_BATCHES,
-            self.EXPECTED_TOTAL_UPDATES,
+            self.training_schedule.total_optimizer_updates,
         )
 
     @staticmethod
@@ -758,12 +817,12 @@ class ControlledRetrievalTrainer(MultiPositiveContrastiveTrainer):
         ignore_keys_for_eval,
         start_time,
     ) -> None:
-        if type(epoch) is not int or epoch not in range(self.EXPECTED_EPOCHS):
+        if type(epoch) is not int or epoch not in range(self.training_schedule.epochs):
             raise RuntimeError(f"Controlled Trainer received invalid zero-based epoch={epoch!r}")
         final_step_save_signal = (
-            self.state.global_step == self.EXPECTED_TOTAL_UPDATES
-            and self.state.max_steps == self.EXPECTED_TOTAL_UPDATES
-            and float(self.state.epoch) == float(self.EXPECTED_EPOCHS)
+            self.state.global_step == self.training_schedule.total_optimizer_updates
+            and self.state.max_steps == self.training_schedule.total_optimizer_updates
+            and float(self.state.epoch) == float(self.training_schedule.epochs)
             and self.control.should_training_stop is True
             and self.control.should_save is True
             and self.control.should_evaluate is False
@@ -798,9 +857,12 @@ class ControlledRetrievalTrainer(MultiPositiveContrastiveTrainer):
         epoch_number = int(epoch)
         if float(epoch) != float(epoch_number):
             raise RuntimeError(f"Validation must run only after a complete epoch; got {epoch}")
-        if epoch_number < 1 or epoch_number > self.EXPECTED_EPOCHS:
-            raise RuntimeError(f"Completed epoch is outside 1..{self.EXPECTED_EPOCHS}: {epoch}")
-        expected_step = epoch_number * self.EXPECTED_UPDATES_PER_EPOCH
+        if epoch_number < 1 or epoch_number > self.training_schedule.epochs:
+            raise RuntimeError(
+                "Completed epoch is outside the sealed schedule: "
+                f"epoch={epoch}, expected=1..{self.training_schedule.epochs}"
+            )
+        expected_step = epoch_number * self.training_schedule.updates_per_epoch
         if self.state.global_step != expected_step:
             raise RuntimeError(
                 f"Completed epoch {epoch_number} has global_step={self.state.global_step}; "
@@ -922,7 +984,9 @@ class ControlledRetrievalTrainer(MultiPositiveContrastiveTrainer):
                 "Controlled checkpointing requires TrainerControl as the only ExportableState"
             )
         expected_control = {
-            "should_training_stop": self._pending_selection.epoch == self.EXPECTED_EPOCHS,
+            "should_training_stop": (
+                self._pending_selection.epoch == self.training_schedule.epochs
+            ),
             "should_epoch_stop": False,
             "should_save": True,
             "should_evaluate": False,
@@ -1133,7 +1197,7 @@ class ControlledRetrievalTrainer(MultiPositiveContrastiveTrainer):
             fresh_model.train()
             return deepspeed_init(
                 self,
-                num_training_steps=self.EXPECTED_TOTAL_UPDATES,
+                num_training_steps=self.training_schedule.total_optimizer_updates,
             )
 
         optimizer, scheduler = _coordinated_local_operation(
@@ -1228,9 +1292,210 @@ class ControlledRetrievalTrainer(MultiPositiveContrastiveTrainer):
             query_inventory_sha256,
         )
         return self._candidate_trace_store.finalize(
-            expected_epochs=self.EXPECTED_EPOCHS,
+            expected_epochs=self.training_schedule.epochs,
             expected_query_ids=query_ids,
         )
+
+
+class DeterminismSmokeRetrievalTrainer(ControlledRetrievalTrainer):
+    """Sealed two-epoch trainer; all scientific behavior is inherited."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        if "training_schedule" in kwargs:
+            raise TypeError("Determinism smoke does not accept a caller-provided schedule")
+        super().__init__(
+            *args,
+            training_schedule=DETERMINISM_SMOKE_TRAINING_SCHEDULE,
+            **kwargs,
+        )
+        self._smoke_initial_model_state: dict[str, Any] | None = None
+        self._smoke_loss_records: list[dict[str, Any]] = []
+        self._smoke_pending_loss: dict[str, Any] | None = None
+        self._smoke_capture_active = False
+
+    def _capture_engine_model_state(self, model, *, context: str) -> dict[str, Any]:
+        if model is not self.deepspeed or model is not self.model_wrapped:
+            raise RuntimeError(f"{context} requires the active top-level DeepSpeed engine")
+        if dist.get_world_size() != SMOKE_WORLD_SIZE:
+            raise RuntimeError(f"{context} requires the exact four-rank smoke topology")
+        rng_before = canonical_state_sha256(capture_rng_state())
+        gathered_state = self.accelerator.get_state_dict(model)
+        rng_after = canonical_state_sha256(capture_rng_state())
+        rank = dist.get_rank()
+
+        def validate_local_capture() -> dict[str, Any] | None:
+            if rng_after != rng_before:
+                raise RuntimeError(f"{context} changed rank-local RNG state")
+            if rank == 0:
+                exact_state = validate_gathered_bf16_model_state(
+                    gathered_state,
+                    torch,
+                )
+                return canonical_model_state_identity(exact_state, torch)
+            if gathered_state is not None:
+                raise RuntimeError(
+                    f"{context} unexpectedly returned gathered state on rank {rank}"
+                )
+            return None
+
+        local_identity = _coordinated_local_operation(context, validate_local_capture)
+        broadcast: list[object] = [local_identity if rank == 0 else None]
+        dist.broadcast_object_list(broadcast, src=0)
+        identity = broadcast[0]
+        if type(identity) is not dict:
+            raise RuntimeError(f"{context} returned malformed model-state identity")
+        gathered_state = None
+        return dict(identity)
+
+    def compute_loss(
+        self,
+        model,
+        inputs: Dict[str, Any],
+        return_outputs: bool = False,
+        num_items_in_batch: int | None = None,
+        **kwargs: Any,
+    ):
+        if not self._smoke_capture_active:
+            return super().compute_loss(
+                model,
+                inputs,
+                return_outputs=return_outputs,
+                num_items_in_batch=num_items_in_batch,
+                **kwargs,
+            )
+        if self._smoke_pending_loss is not None:
+            raise RuntimeError("Smoke loss evidence from a prior microbatch was not consumed")
+        scaled_loss, outputs = super().compute_loss(
+            model,
+            inputs,
+            return_outputs=True,
+            num_items_in_batch=num_items_in_batch,
+            **kwargs,
+        )
+        if type(outputs) is not dict or set(outputs) != {
+            "loss",
+            "local_loss_sum",
+            "per_query_loss",
+            "local_valid_query_count",
+            "global_window_valid_count",
+            "global_unique_passage_count",
+        }:
+            raise RuntimeError("Smoke compute_loss received a changed controlled output schema")
+        self._smoke_pending_loss = {
+            "local_loss_sum": outputs["local_loss_sum"].detach(),
+            "scaled_loss": outputs["loss"].detach(),
+            "per_query_losses": outputs["per_query_loss"].detach(),
+            "local_valid_query_count": outputs["local_valid_query_count"],
+            "global_window_valid_query_count": outputs[
+                "global_window_valid_count"
+            ],
+        }
+        if return_outputs:
+            return scaled_loss, outputs
+        return scaled_loss
+
+    @staticmethod
+    def _window_coordinates(local_microbatch_index: int) -> tuple[int, int]:
+        offset = 0
+        for window_index, count in enumerate((8, 8, 3)):
+            if local_microbatch_index < offset + count:
+                return window_index, local_microbatch_index - offset
+            offset += count
+        raise ValueError("Smoke local microbatch index is outside 0..18")
+
+    def training_step(
+        self,
+        model,
+        inputs: Dict[str, Any],
+        num_items_in_batch: int | None = None,
+    ) -> torch.Tensor:
+        if self._smoke_initial_model_state is None:
+            if self.state.global_step != 0 or self._smoke_loss_records:
+                raise RuntimeError("Smoke initial Engine-A state was not captured first")
+            self._smoke_initial_model_state = self._capture_engine_model_state(
+                model,
+                context="Smoke initial Engine-A state capture",
+            )
+        traces = inputs.get("sampling_traces")
+        if type(traces) is not list or not traces:
+            raise TypeError("Smoke training step requires non-empty sampling traces")
+        epochs = {trace.get("epoch") for trace in traces if type(trace) is dict}
+        if len(epochs) != 1:
+            raise RuntimeError("Smoke microbatch sampling traces span multiple epochs")
+        epoch = next(iter(epochs))
+        if type(epoch) is not int:
+            raise TypeError("Smoke sampling trace epoch must be one exact integer")
+        position = len(self._smoke_loss_records)
+        expected_epoch, local_index = divmod(
+            position,
+            SMOKE_MICROBATCHES_PER_RANK_PER_EPOCH,
+        )
+        if epoch != expected_epoch:
+            raise RuntimeError(
+                f"Smoke loss trace epoch changed: actual={epoch}, expected={expected_epoch}"
+            )
+        window_index, window_microbatch_index = self._window_coordinates(local_index)
+        global_step_before = self.state.global_step
+        marker = inputs.get("is_window_end")
+        self._smoke_capture_active = True
+        try:
+            loss = super().training_step(
+                model,
+                inputs,
+                num_items_in_batch=num_items_in_batch,
+            )
+        finally:
+            self._smoke_capture_active = False
+        components = self._smoke_pending_loss
+        self._smoke_pending_loss = None
+        if type(components) is not dict:
+            raise RuntimeError("Smoke training step did not capture exact loss components")
+        record = build_smoke_microbatch_loss_record(
+            epoch=epoch,
+            rank=dist.get_rank(),
+            local_microbatch_index=local_index,
+            optimizer_window_index=window_index,
+            window_microbatch_index=window_microbatch_index,
+            global_step_before=global_step_before,
+            is_window_end=marker,
+            query_ids=[trace["query_id"] for trace in traces],
+            candidate_trace_sha256=[trace["trace_sha256"] for trace in traces],
+            local_valid_query_count=components["local_valid_query_count"],
+            global_window_valid_query_count=components[
+                "global_window_valid_query_count"
+            ],
+            local_loss_sum=components["local_loss_sum"],
+            scaled_loss=components["scaled_loss"],
+            per_query_losses=components["per_query_losses"],
+            torch_module=torch,
+        )
+        self._smoke_loss_records.append(record)
+        return loss
+
+    @property
+    def smoke_initial_model_state(self) -> dict[str, Any]:
+        if self._smoke_initial_model_state is None:
+            raise RuntimeError("Smoke initial model-state evidence is absent")
+        return dict(self._smoke_initial_model_state)
+
+    def capture_smoke_last_model_state(self) -> dict[str, Any]:
+        if self.state.global_step != self.training_schedule.total_optimizer_updates:
+            raise RuntimeError("Smoke last-state capture requires all six updates")
+        return self._capture_engine_model_state(
+            self.deepspeed,
+            context="Smoke last Engine-A state capture",
+        )
+
+    def finalize_smoke_loss_traces(self) -> dict[str, Any]:
+        if self._smoke_pending_loss is not None or self._smoke_capture_active:
+            raise RuntimeError("Smoke loss finalization found an incomplete microbatch")
+        gathered: list[object] = [None for _ in range(SMOKE_WORLD_SIZE)]
+        dist.all_gather_object(gathered, list(self._smoke_loss_records))
+        identity = build_smoke_loss_trace_identity(gathered)
+        return {
+            "identity": identity,
+            "per_rank_records": gathered,
+        }
 
 
 @dataclass(frozen=True)

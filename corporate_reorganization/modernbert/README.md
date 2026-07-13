@@ -194,6 +194,16 @@ The Step 6 CPU/Gloo contracts run in the same pinned base image:
       corporate_reorganization.modernbert.tests.test_retrieval_checkpointing \
       corporate_reorganization.modernbert.tests.test_retrieval_trainer_lifecycle_runtime
 
+The two-epoch determinism-smoke runtime, artifact, request, and exact comparison
+contracts run in the derived training image with networking disabled:
+
+    python -m unittest -v \
+      corporate_reorganization.modernbert.tests.test_retrieval_determinism \
+      corporate_reorganization.modernbert.tests.test_retrieval_determinism_trainer_runtime \
+      corporate_reorganization.modernbert.tests.test_retrieval_determinism_artifacts \
+      corporate_reorganization.modernbert.tests.test_retrieval_cv_training_aws \
+      corporate_reorganization.modernbert.tests.test_retrieval_cv_determinism_gate
+
 The Step 7 scientific, archive, artifact, ranker, bundle, and CLI contracts run
 in the pinned image as well:
 

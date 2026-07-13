@@ -460,6 +460,278 @@ class ControlledTrainingRequestTest(unittest.TestCase):
         self.assertEqual(rendered["experiment-seed"], "17")
 
 
+class DeterminismSmokeTrainingRequestTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.plan, _ = _training_plan(self.root)
+        self.staging = _staging_receipt(self.plan)
+        self.smokes = self.plan["auxiliary_runs"][2:]
+        self.first, self.second = self.smokes
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def test_exact_smoke_toolkit_mapping_user_argv_and_golden_request(self) -> None:
+        logical = {
+            "epochs": 2,
+            "experiment_seed": 17,
+            "outer_fold": 0,
+            "query_view": "structured",
+            "run_kind": "determinism_smoke",
+            "sampler": "global_uniform",
+            "total_optimizer_updates": 6,
+        }
+        rendered = training_aws.render_determinism_smoke_toolkit_hyperparameters(
+            job_name=self.first["job_name"],
+            region=REGION,
+            logical_hyperparameters=logical,
+        )
+        expected_hyperparameters = {
+            "epochs": "2",
+            "experiment-seed": "17",
+            "outer-fold": "0",
+            "query-view": '"structured"',
+            "run-kind": '"determinism_smoke"',
+            "sagemaker_container_log_level": "20",
+            "sagemaker_job_name": f'"{self.first["job_name"]}"',
+            "sagemaker_mpi_enabled": "true",
+            "sagemaker_mpi_num_of_processes_per_host": "4",
+            "sagemaker_program": '"bootstrap.py"',
+            "sagemaker_region": '"us-east-1"',
+            "sagemaker_submit_directory": '"/opt/training_bootstrap"',
+            "sampler": '"global_uniform"',
+            "total-optimizer-updates": "6",
+        }
+        self.assertEqual(rendered, expected_hyperparameters)
+        self.assertEqual(
+            training_aws.toolkit_user_command_arguments(rendered),
+            [
+                "--epochs",
+                "2",
+                "--experiment-seed",
+                "17",
+                "--outer-fold",
+                "0",
+                "--query-view",
+                "structured",
+                "--run-kind",
+                "determinism_smoke",
+                "--sampler",
+                "global_uniform",
+                "--total-optimizer-updates",
+                "6",
+            ],
+        )
+
+        request = training_aws.render_determinism_smoke_training_request(
+            training_plan=self.plan,
+            run_id=self.first["run_id"],
+            staging_receipt=self.staging,
+        )
+        matching_controlled = next(
+            run
+            for run in self.plan["controlled_runs"]
+            if run["cell"]
+            == {
+                "outer_fold": 0,
+                "query_view": "structured",
+                "sampler": "global_uniform",
+                "experiment_seed": 17,
+            }
+        )
+        expected = training_aws.render_controlled_training_request(
+            training_plan=self.plan,
+            run_id=matching_controlled["run_id"],
+            staging_receipt=self.staging,
+        )
+        expected["HyperParameters"] = expected_hyperparameters
+        expected["OutputDataConfig"]["S3OutputPath"] = self.first["output_prefix"]
+        expected["TrainingJobName"] = self.first["job_name"]
+        self.assertEqual(request, expected)
+        self.assertEqual([row["ChannelName"] for row in request["InputDataConfig"]], [
+            "base_model",
+            "data",
+            "source",
+        ])
+        self.assertTrue(
+            all(
+                row["DataSource"]["S3DataSource"]["S3Uri"].endswith("/")
+                for row in request["InputDataConfig"]
+            )
+        )
+        self.assertTrue(request["EnableNetworkIsolation"])
+        self.assertFalse(request["EnableManagedSpotTraining"])
+        self.assertFalse(any("replica" in key.lower() for key in request["Environment"]))
+
+    def test_two_receipts_are_exactly_equivalent_outside_launch_coordinates(self) -> None:
+        receipts = [
+            training_aws.build_determinism_smoke_training_request_receipt(
+                training_plan=self.plan,
+                run_id=run["run_id"],
+                staging_receipt=self.staging,
+            )
+            for run in self.smokes
+        ]
+        for receipt in receipts:
+            self.assertEqual(
+                training_aws.validate_determinism_smoke_training_request_receipt(
+                    receipt,
+                    training_plan=self.plan,
+                    staging_receipt=self.staging,
+                ),
+                receipt,
+            )
+            self.assertEqual(
+                receipt["protocol"],
+                training_aws.DETERMINISM_SMOKE_REQUEST_PROTOCOL,
+            )
+            self.assertNotIn("replica_id", receipt)
+            self.assertFalse(
+                any("replica" in key.lower() for key in receipt["request"]["Environment"])
+            )
+        equivalence = training_aws.validate_determinism_smoke_request_equivalence(
+            receipts[1],
+            receipts[0],
+            training_plan=self.plan,
+            staging_receipt=self.staging,
+        )
+        self.assertEqual(
+            equivalence["protocol"],
+            training_aws.DETERMINISM_SMOKE_EQUIVALENCE_PROTOCOL,
+        )
+        self.assertEqual(
+            [row["run_id"] for row in equivalence["launch_coordinates"]],
+            ["determinism-smoke-a", "determinism-smoke-b"],
+        )
+        self.assertEqual(
+            equivalence["user_argv"],
+            training_aws.toolkit_user_command_arguments(
+                receipts[0]["request"]["HyperParameters"]
+            ),
+        )
+        first_request, second_request = [row["request"] for row in receipts]
+        self.assertNotEqual(first_request["TrainingJobName"], second_request["TrainingJobName"])
+        self.assertNotEqual(
+            first_request["OutputDataConfig"]["S3OutputPath"],
+            second_request["OutputDataConfig"]["S3OutputPath"],
+        )
+        self.assertNotEqual(
+            first_request["HyperParameters"]["sagemaker_job_name"],
+            second_request["HyperParameters"]["sagemaker_job_name"],
+        )
+
+    def test_wrong_kind_cell_schedule_replica_and_malformed_types_fail(self) -> None:
+        with self.assertRaisesRegex(ValueError, "(?i)determinism-smoke auxiliary"):
+            training_aws.render_determinism_smoke_training_request(
+                training_plan=self.plan,
+                run_id=self.plan["controlled_runs"][0]["run_id"],
+                staging_receipt=self.staging,
+            )
+        with self.assertRaisesRegex(ValueError, "(?i)determinism-smoke auxiliary"):
+            training_aws.render_determinism_smoke_training_request(
+                training_plan=self.plan,
+                run_id=self.plan["auxiliary_runs"][0]["run_id"],
+                staging_receipt=self.staging,
+            )
+
+        mutations = []
+        wrong_kind = copy.deepcopy(self.plan)
+        wrong_kind["auxiliary_runs"][2]["kind"] = manifest.LEGACY_KIND
+        mutations.append(wrong_kind)
+        wrong_cell = copy.deepcopy(self.plan)
+        wrong_cell["auxiliary_runs"][2]["cell"]["outer_fold"] = 1
+        mutations.append(wrong_cell)
+        wrong_schedule = copy.deepcopy(self.plan)
+        wrong_schedule["auxiliary_runs"][2]["hyperparameters"]["epochs"] = 3
+        mutations.append(wrong_schedule)
+        wrong_replica = copy.deepcopy(self.plan)
+        wrong_replica["auxiliary_runs"][2]["launch_metadata"]["replica_id"] = "b"
+        mutations.append(wrong_replica)
+        for changed in mutations:
+            with self.subTest(changed=changed):
+                with self.assertRaises(ValueError):
+                    training_aws.render_determinism_smoke_training_request(
+                        training_plan=changed,
+                        run_id="determinism-smoke-a",
+                        staging_receipt=self.staging,
+                    )
+
+        valid = copy.deepcopy(training_aws.DETERMINISM_SMOKE_LOGICAL_HYPERPARAMETERS)
+        malformed = []
+        for field, replacement in (
+            ("outer_fold", False),
+            ("epochs", True),
+            ("total_optimizer_updates", 6.0),
+            ("experiment_seed", "17"),
+            ("query_view", "flat_masked"),
+            ("sampler", "local_unique"),
+            ("run_kind", "controlled_full"),
+        ):
+            changed = copy.deepcopy(valid)
+            changed[field] = replacement
+            malformed.append(changed)
+        malformed.extend(
+            [
+                {**valid, "replica_id": "a"},
+                {key: value for key, value in valid.items() if key != "epochs"},
+            ]
+        )
+        for changed in malformed:
+            with self.subTest(logical=changed):
+                with self.assertRaises((TypeError, ValueError)):
+                    training_aws.validate_determinism_smoke_logical_hyperparameters(
+                        changed
+                    )
+
+    def test_replica_leakage_unexpected_differences_and_type_attacks_fail(self) -> None:
+        receipts = [
+            training_aws.build_determinism_smoke_training_request_receipt(
+                training_plan=self.plan,
+                run_id=run["run_id"],
+                staging_receipt=self.staging,
+            )
+            for run in self.smokes
+        ]
+        leaked_plan = copy.deepcopy(self.plan)
+        leaked_plan["auxiliary_runs"][2]["environment"]["ARR_REPLICA_ID"] = "a"
+        with self.assertRaises(ValueError):
+            training_aws.render_determinism_smoke_training_request(
+                training_plan=leaked_plan,
+                run_id="determinism-smoke-a",
+                staging_receipt=self.staging,
+            )
+
+        attacks = []
+        leaked_receipt = copy.deepcopy(receipts[0])
+        leaked_receipt["request"]["Environment"]["ARR_REPLICA_ID"] = "a"
+        leaked_receipt["request_sha256"] = aws.sha256_bytes(
+            aws.canonical_json_bytes(leaked_receipt["request"])
+        )
+        attacks.append(leaked_receipt)
+        unexpected = copy.deepcopy(receipts[0])
+        unexpected["request"]["ResourceConfig"]["VolumeSizeInGB"] = 201
+        unexpected["request_sha256"] = aws.sha256_bytes(
+            aws.canonical_json_bytes(unexpected["request"])
+        )
+        attacks.append(unexpected)
+        bool_attack = copy.deepcopy(receipts[0])
+        bool_attack["request"]["EnableNetworkIsolation"] = 1
+        attacks.append(bool_attack)
+        float_attack = copy.deepcopy(receipts[0])
+        float_attack["request"]["ResourceConfig"]["VolumeSizeInGB"] = 200.0
+        attacks.append(float_attack)
+        for attack in attacks:
+            with self.subTest(attack=attack):
+                with self.assertRaisesRegex(ValueError, "re-rendering"):
+                    training_aws.validate_determinism_smoke_request_equivalence(
+                        attack,
+                        receipts[1],
+                        training_plan=self.plan,
+                        staging_receipt=self.staging,
+                    )
+
+
 class TrainingStagingReceiptTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()

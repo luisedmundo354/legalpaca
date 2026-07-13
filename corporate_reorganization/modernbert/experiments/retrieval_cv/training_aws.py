@@ -24,6 +24,12 @@ from . import manifest
 
 TRAINING_STAGING_PROTOCOL = "retrieval_cv_training_input_staging_v1"
 CONTROLLED_REQUEST_PROTOCOL = "retrieval_cv_controlled_training_request_v1"
+DETERMINISM_SMOKE_REQUEST_PROTOCOL = (
+    "retrieval_cv_determinism_smoke_training_request_v1"
+)
+DETERMINISM_SMOKE_EQUIVALENCE_PROTOCOL = (
+    "retrieval_cv_determinism_smoke_request_equivalence_v1"
+)
 TRAINING_TOOLKIT_VERSION = "5.0.0"
 TRAINING_TOOLKIT_MAPPING_SHA256 = (
     "3fd30fe8dcb3925d4c31807a916296956e5019c9875249a8299cc25d40aa176f"
@@ -57,6 +63,24 @@ CONTROLLED_LOGICAL_TO_CLI = {
     "outer_fold": "outer-fold",
     "query_view": "query-view",
     "sampler": "sampler",
+}
+DETERMINISM_SMOKE_LOGICAL_TO_CLI = {
+    "epochs": "epochs",
+    "experiment_seed": "experiment-seed",
+    "outer_fold": "outer-fold",
+    "query_view": "query-view",
+    "run_kind": "run-kind",
+    "sampler": "sampler",
+    "total_optimizer_updates": "total-optimizer-updates",
+}
+DETERMINISM_SMOKE_LOGICAL_HYPERPARAMETERS = {
+    "epochs": 2,
+    "experiment_seed": 17,
+    "outer_fold": 0,
+    "query_view": "structured",
+    "run_kind": manifest.SMOKE_KIND,
+    "sampler": "global_uniform",
+    "total_optimizer_updates": 6,
 }
 CONTROLLED_QUERY_VIEWS = {"flat_masked", "structured"}
 CONTROLLED_SAMPLERS = {"global_uniform", "local_unique"}
@@ -272,26 +296,42 @@ def validate_controlled_logical_hyperparameters(value: object) -> dict[str, Any]
     return copy.deepcopy(logical)
 
 
-def render_toolkit_hyperparameters(
+def validate_determinism_smoke_logical_hyperparameters(
+    value: object,
+) -> dict[str, Any]:
+    """Validate the one frozen two-epoch distributed determinism cell."""
+
+    logical = _exact_keys(
+        value,
+        set(DETERMINISM_SMOKE_LOGICAL_TO_CLI),
+        name="determinism-smoke logical hyperparameters",
+    )
+    for name, expected in DETERMINISM_SMOKE_LOGICAL_HYPERPARAMETERS.items():
+        actual = logical[name]
+        if type(actual) is not type(expected) or actual != expected:
+            raise ValueError(
+                "Determinism-smoke logical hyperparameter changed: "
+                f"{name}={actual!r}, expected={expected!r}"
+            )
+    return copy.deepcopy(logical)
+
+
+def _render_exact_toolkit_hyperparameters(
     *,
     job_name: str,
     region: str,
-    logical_hyperparameters: Mapping[str, Any],
+    logical: Mapping[str, Any],
+    logical_to_cli: Mapping[str, str],
 ) -> dict[str, str]:
-    """Render the exact strings consumed by training-toolkit 5.0.0."""
-
-    logical = validate_controlled_logical_hyperparameters(
-        dict(logical_hyperparameters)
-    )
     if type(job_name) is not str or aws._JOB_NAME.fullmatch(job_name) is None:
-        raise ValueError("Controlled training job name is invalid")
+        raise ValueError("Training job name is invalid")
     if region != "us-east-1":
-        raise ValueError("Controlled training region changed")
+        raise ValueError("Training region changed")
     rendered = {
-        CONTROLLED_LOGICAL_TO_CLI[key]: _json_scalar(
+        logical_to_cli[key]: _json_scalar(
             logical[key], name=f"logical_hyperparameters.{key}"
         )
-        for key in sorted(CONTROLLED_LOGICAL_TO_CLI)
+        for key in sorted(logical_to_cli)
     }
     rendered.update(
         {
@@ -317,17 +357,69 @@ def render_toolkit_hyperparameters(
     return {key: rendered[key] for key in sorted(rendered)}
 
 
+def render_toolkit_hyperparameters(
+    *,
+    job_name: str,
+    region: str,
+    logical_hyperparameters: Mapping[str, Any],
+) -> dict[str, str]:
+    """Render the exact strings consumed by training-toolkit 5.0.0."""
+
+    logical = validate_controlled_logical_hyperparameters(
+        dict(logical_hyperparameters)
+    )
+    if type(job_name) is not str or aws._JOB_NAME.fullmatch(job_name) is None:
+        raise ValueError("Controlled training job name is invalid")
+    if region != "us-east-1":
+        raise ValueError("Controlled training region changed")
+    return _render_exact_toolkit_hyperparameters(
+        job_name=job_name,
+        region=region,
+        logical=logical,
+        logical_to_cli=CONTROLLED_LOGICAL_TO_CLI,
+    )
+
+
+def render_determinism_smoke_toolkit_hyperparameters(
+    *,
+    job_name: str,
+    region: str,
+    logical_hyperparameters: Mapping[str, Any],
+) -> dict[str, str]:
+    """Render the exact pinned-toolkit strings for one determinism smoke."""
+
+    logical = validate_determinism_smoke_logical_hyperparameters(
+        dict(logical_hyperparameters)
+    )
+    return _render_exact_toolkit_hyperparameters(
+        job_name=job_name,
+        region=region,
+        logical=logical,
+        logical_to_cli=DETERMINISM_SMOKE_LOGICAL_TO_CLI,
+    )
+
+
 def toolkit_user_command_arguments(
     hyperparameters: Mapping[str, str],
 ) -> list[str]:
     """Reproduce the pinned toolkit mapping after exact schema validation."""
 
-    expected_keys = {
+    controlled_keys = {
         *CONTROLLED_LOGICAL_TO_CLI.values(),
         *_RESERVED_HYPERPARAMETERS,
     }
-    if type(hyperparameters) is not dict or set(hyperparameters) != expected_keys:
-        raise ValueError("Rendered controlled hyperparameter schema changed")
+    smoke_keys = {
+        *DETERMINISM_SMOKE_LOGICAL_TO_CLI.values(),
+        *_RESERVED_HYPERPARAMETERS,
+    }
+    actual_keys = (
+        frozenset(hyperparameters) if type(hyperparameters) is dict else frozenset()
+    )
+    if type(hyperparameters) is not dict or actual_keys not in {
+        frozenset(controlled_keys),
+        frozenset(smoke_keys),
+    }:
+        raise ValueError("Rendered training hyperparameter schema changed")
     decoded: dict[str, object] = {}
     for key in sorted(hyperparameters):
         raw_value = hyperparameters[key]
@@ -360,6 +452,18 @@ def toolkit_user_command_arguments(
         or decoded["sagemaker_submit_directory"] != BOOTSTRAP_SUBMIT_DIRECTORY
     ):
         raise ValueError("Pinned toolkit job/source hyperparameters changed")
+    user_decoded = {
+        key: decoded[cli_name]
+        for key, cli_name in (
+            CONTROLLED_LOGICAL_TO_CLI.items()
+            if actual_keys == frozenset(controlled_keys)
+            else DETERMINISM_SMOKE_LOGICAL_TO_CLI.items()
+        )
+    }
+    if actual_keys == frozenset(controlled_keys):
+        validate_controlled_logical_hyperparameters(user_decoded)
+    else:
+        validate_determinism_smoke_logical_hyperparameters(user_decoded)
     arguments: list[str] = []
     for key in sorted(set(decoded) - _RESERVED_HYPERPARAMETERS):
         arguments.extend((f"--{key}", str(decoded[key])))
@@ -919,6 +1023,52 @@ def _find_controlled_run(plan: Mapping[str, Any], run_id: str) -> dict[str, Any]
     return matches[0]
 
 
+def _find_determinism_smoke_run(
+    plan: Mapping[str, Any], run_id: str
+) -> dict[str, Any]:
+    if type(run_id) is not str or not run_id:
+        raise ValueError("run_id must be one non-empty string")
+    matches = [
+        run for run in plan["auxiliary_runs"] if run.get("run_id") == run_id
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            "run_id does not select exactly one determinism-smoke auxiliary run"
+        )
+    run = matches[0]
+    expected_replica_by_run = {
+        "determinism-smoke-a": "a",
+        "determinism-smoke-b": "b",
+    }
+    replica_id = expected_replica_by_run.get(run_id)
+    if (
+        replica_id is None
+        or run.get("kind") != manifest.SMOKE_KIND
+        or run.get("entry_point") != "train_sm.py"
+        or run.get("cell")
+        != {
+            "outer_fold": 0,
+            "query_view": "structured",
+            "sampler": "global_uniform",
+            "experiment_seed": 17,
+        }
+        or run.get("expected_artifact_identity")
+        != {
+            "artifact_type": "determinism_smoke_retriever",
+            "schema_version": 1,
+            "validator_version": "determinism_smoke_artifact_v1",
+        }
+        or run.get("launch_metadata") != {"replica_id": replica_id}
+    ):
+        raise ValueError("Determinism-smoke auxiliary run identity changed")
+    logical = validate_determinism_smoke_logical_hyperparameters(
+        run.get("hyperparameters")
+    )
+    if logical != DETERMINISM_SMOKE_LOGICAL_HYPERPARAMETERS:
+        raise ValueError("Determinism-smoke run hyperparameters changed")
+    return run
+
+
 def render_controlled_training_request(
     *,
     training_plan: Mapping[str, Any],
@@ -1026,6 +1176,128 @@ def render_controlled_training_request(
     }
 
 
+def render_determinism_smoke_training_request(
+    *,
+    training_plan: Mapping[str, Any],
+    run_id: str,
+    staging_receipt: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Render one non-submitting request for a frozen determinism replica."""
+
+    plan = _validated_training_plan(training_plan)
+    staged = validate_training_staging_receipt(
+        dict(staging_receipt), training_plan=plan
+    )
+    run = _find_determinism_smoke_run(plan, run_id)
+    logical = validate_determinism_smoke_logical_hyperparameters(
+        run["hyperparameters"]
+    )
+    expected_scientific_channels = {
+        name: run["input_channels"][name]["s3_uri"]
+        for name in ("base_model", "data")
+    }
+    expected_staged_channels = {
+        name: expected_scientific_channels[name] + "/"
+        for name in ("base_model", "data")
+    }
+    expected_staged_channels["source"] = _s3_uri(
+        plan["infrastructure"]["artifact_bucket"], staged["prefixes"]["source"]
+    )
+    if staged["channels"] != expected_staged_channels:
+        raise ValueError("Determinism-smoke channels differ from staged inputs")
+    image_uri = plan["study"]["training_image_uri"]
+    if (
+        image_uri != TRAINING_IMAGE_URI
+        or image_uri.rsplit("@", 1)[1] != TRAINING_IMAGE_DIGEST
+        or plan["study"]["training_image_inventory_sha256"]
+        != TRAINING_IMAGE_RUNTIME_INVENTORY_SHA256
+        or plan["study"]["training_base_image_uri"] != BASE_TRAINING_IMAGE_URI
+    ):
+        raise ValueError("Determinism-smoke training image provenance changed")
+    hyperparameters = render_determinism_smoke_toolkit_hyperparameters(
+        job_name=run["job_name"],
+        region=plan["infrastructure"]["region"],
+        logical_hyperparameters=logical,
+    )
+    user_arguments = toolkit_user_command_arguments(hyperparameters)
+    expected_user_arguments = []
+    for key in sorted(DETERMINISM_SMOKE_LOGICAL_TO_CLI.values()):
+        expected_user_arguments.extend(
+            (f"--{key}", str(json.loads(hyperparameters[key])))
+        )
+    if user_arguments != expected_user_arguments or any(
+        "replica" in argument.lower() for argument in user_arguments
+    ):
+        raise RuntimeError("Determinism-smoke scientific user argv changed")
+    environment = copy.deepcopy(run["environment"])
+    if environment["PYTHONHASHSEED"] != "17" or any(
+        "replica" in name.lower() or "replica" in value.lower()
+        for name, value in environment.items()
+    ):
+        raise ValueError("Determinism-smoke environment contains launch identity")
+    environment.update(
+        {
+            "ARR_TRAINING_BASE_IMAGE_URI": BASE_TRAINING_IMAGE_URI,
+            "ARR_TRAINING_IMAGE_RUNTIME_INVENTORY_SHA256": (
+                TRAINING_IMAGE_RUNTIME_INVENTORY_SHA256
+            ),
+            "ARR_TRAINING_IMAGE_URI": image_uri,
+            "ARR_SOURCE_BUNDLE_NAME": plan["sources"]["source_bundle_path"],
+            "ARR_SOURCE_BUNDLE_SHA256": plan["sources"]["source_bundle_sha256"],
+            "ARR_SOURCE_BUNDLE_SIZE": str(plan["sources"]["source_bundle_size"]),
+            "ARR_SOURCE_COMMIT_EPOCH": str(plan["sources"]["commit_epoch"]),
+            "ARR_SOURCE_INVENTORY_SHA256": plan["sources"][
+                "source_inventory_sha256"
+            ],
+            "ARR_TRAINING_PLAN_SHA256": _plan_sha256(plan),
+            "ARR_TRAINING_STAGING_RECEIPT_SHA256": aws.sha256_bytes(
+                aws.canonical_json_bytes(staged)
+            ),
+        }
+    )
+    if any(
+        "replica" in name.lower() or "replica" in value.lower()
+        for name, value in environment.items()
+    ):
+        raise ValueError("Determinism-smoke environment contains launch identity")
+    infrastructure = plan["infrastructure"]
+    tags = [
+        {"Key": key, "Value": TRAINING_TAGS[key]}
+        for key in sorted(TRAINING_TAGS)
+    ]
+    return {
+        "AlgorithmSpecification": {
+            "EnableSageMakerMetricsTimeSeries": False,
+            "TrainingImage": image_uri,
+            "TrainingInputMode": "File",
+        },
+        "EnableManagedSpotTraining": False,
+        "EnableNetworkIsolation": True,
+        "Environment": environment,
+        "HyperParameters": hyperparameters,
+        "InputDataConfig": [
+            _training_channel("base_model", expected_staged_channels["base_model"]),
+            _training_channel("data", expected_staged_channels["data"]),
+            _training_channel("source", expected_staged_channels["source"]),
+        ],
+        "OutputDataConfig": {
+            "CompressionType": "GZIP",
+            "S3OutputPath": run["output_prefix"],
+        },
+        "ResourceConfig": {
+            "InstanceCount": infrastructure["training_instance_count"],
+            "InstanceType": infrastructure["training_instance_type"],
+            "VolumeSizeInGB": infrastructure["training_volume_size_gb"],
+        },
+        "RoleArn": infrastructure["role_arn"],
+        "StoppingCondition": {
+            "MaxRuntimeInSeconds": infrastructure["training_max_runtime_seconds"]
+        },
+        "Tags": tags,
+        "TrainingJobName": run["job_name"],
+    }
+
+
 def build_controlled_training_request_receipt(
     *,
     training_plan: Mapping[str, Any],
@@ -1089,21 +1361,177 @@ def validate_controlled_training_request_receipt(
     return copy.deepcopy(receipt)
 
 
+def build_determinism_smoke_training_request_receipt(
+    *,
+    training_plan: Mapping[str, Any],
+    run_id: str,
+    staging_receipt: Mapping[str, Any],
+) -> dict[str, Any]:
+    plan = _validated_training_plan(training_plan)
+    staged = validate_training_staging_receipt(
+        dict(staging_receipt), training_plan=plan
+    )
+    request = render_determinism_smoke_training_request(
+        training_plan=plan,
+        run_id=run_id,
+        staging_receipt=staged,
+    )
+    return {
+        "plan_sha256": _plan_sha256(plan),
+        "protocol": DETERMINISM_SMOKE_REQUEST_PROTOCOL,
+        "request": request,
+        "request_sha256": aws.sha256_bytes(aws.canonical_json_bytes(request)),
+        "run_id": run_id,
+        "schema_version": 1,
+        "staging_receipt_sha256": aws.sha256_bytes(
+            aws.canonical_json_bytes(staged)
+        ),
+        "toolkit_provenance": {
+            "mapping_py_sha256": TRAINING_TOOLKIT_MAPPING_SHA256,
+            "sagemaker_training_version": TRAINING_TOOLKIT_VERSION,
+        },
+    }
+
+
+def validate_determinism_smoke_training_request_receipt(
+    value: object,
+    *,
+    training_plan: Mapping[str, Any],
+    staging_receipt: Mapping[str, Any],
+) -> dict[str, Any]:
+    _require_plain_json(value, name="determinism-smoke training request receipt")
+    receipt = _exact_keys(
+        value,
+        {
+            "plan_sha256",
+            "protocol",
+            "request",
+            "request_sha256",
+            "run_id",
+            "schema_version",
+            "staging_receipt_sha256",
+            "toolkit_provenance",
+        },
+        name="determinism-smoke training request receipt",
+    )
+    expected = build_determinism_smoke_training_request_receipt(
+        training_plan=training_plan,
+        run_id=receipt["run_id"],
+        staging_receipt=staging_receipt,
+    )
+    if aws.canonical_json_bytes(receipt) != aws.canonical_json_bytes(expected):
+        raise ValueError(
+            "Determinism-smoke training request receipt differs from re-rendering"
+        )
+    return copy.deepcopy(receipt)
+
+
+def _normalized_determinism_smoke_request(
+    request: Mapping[str, Any],
+) -> dict[str, Any]:
+    normalized = copy.deepcopy(dict(request))
+    normalized.pop("TrainingJobName")
+    normalized["OutputDataConfig"].pop("S3OutputPath")
+    normalized["HyperParameters"].pop("sagemaker_job_name")
+    return normalized
+
+
+def validate_determinism_smoke_request_equivalence(
+    first_value: object,
+    second_value: object,
+    *,
+    training_plan: Mapping[str, Any],
+    staging_receipt: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Prove two smoke requests differ only in their three launch coordinates."""
+
+    first = validate_determinism_smoke_training_request_receipt(
+        first_value,
+        training_plan=training_plan,
+        staging_receipt=staging_receipt,
+    )
+    second = validate_determinism_smoke_training_request_receipt(
+        second_value,
+        training_plan=training_plan,
+        staging_receipt=staging_receipt,
+    )
+    by_run = {first["run_id"]: first, second["run_id"]: second}
+    expected_run_ids = {"determinism-smoke-a", "determinism-smoke-b"}
+    if set(by_run) != expected_run_ids or len(by_run) != 2:
+        raise ValueError("Smoke equivalence requires exactly replicas a and b")
+    ordered = [by_run[run_id] for run_id in sorted(expected_run_ids)]
+    requests = [receipt["request"] for receipt in ordered]
+    launch_coordinates = [
+        {
+            "run_id": receipt["run_id"],
+            "training_job_name": request["TrainingJobName"],
+            "s3_output_path": request["OutputDataConfig"]["S3OutputPath"],
+            "toolkit_job_name": json.loads(
+                request["HyperParameters"]["sagemaker_job_name"]
+            ),
+        }
+        for receipt, request in zip(ordered, requests)
+    ]
+    for coordinate in launch_coordinates:
+        if coordinate["training_job_name"] != coordinate["toolkit_job_name"]:
+            raise ValueError("Smoke request job-name launch coordinates disagree")
+    for field in ("training_job_name", "s3_output_path", "toolkit_job_name"):
+        if launch_coordinates[0][field] == launch_coordinates[1][field]:
+            raise ValueError(f"Smoke launch coordinate did not vary: {field}")
+
+    normalized = [
+        _normalized_determinism_smoke_request(request) for request in requests
+    ]
+    normalized_bytes = [aws.canonical_json_bytes(value) for value in normalized]
+    if normalized_bytes[0] != normalized_bytes[1]:
+        raise ValueError(
+            "Determinism-smoke requests differ outside their launch coordinates"
+        )
+    user_argv = [
+        toolkit_user_command_arguments(request["HyperParameters"])
+        for request in requests
+    ]
+    if user_argv[0] != user_argv[1] or any(
+        "replica" in argument.lower() for argument in user_argv[0]
+    ):
+        raise ValueError("Determinism-smoke scientific user argv differs by replica")
+    user_argv_sha256 = aws.sha256_bytes(aws.canonical_json_bytes(user_argv[0]))
+    return {
+        "launch_coordinates": launch_coordinates,
+        "normalized_request_sha256": aws.sha256_bytes(normalized_bytes[0]),
+        "protocol": DETERMINISM_SMOKE_EQUIVALENCE_PROTOCOL,
+        "request_sha256_by_run": {
+            receipt["run_id"]: receipt["request_sha256"] for receipt in ordered
+        },
+        "schema_version": 1,
+        "user_argv": user_argv[0],
+        "user_argv_sha256": user_argv_sha256,
+    }
+
+
 __all__: Sequence[str] = (
     "BASE_TRAINING_IMAGE_URI",
     "CONTROLLED_REQUEST_PROTOCOL",
+    "DETERMINISM_SMOKE_EQUIVALENCE_PROTOCOL",
+    "DETERMINISM_SMOKE_REQUEST_PROTOCOL",
     "TRAINING_IMAGE_DIGEST",
     "TRAINING_IMAGE_RUNTIME_INVENTORY_SHA256",
     "TRAINING_STAGING_PROTOCOL",
     "TRAINING_TOOLKIT_MAPPING_SHA256",
     "TRAINING_TOOLKIT_VERSION",
     "build_controlled_training_request_receipt",
+    "build_determinism_smoke_training_request_receipt",
     "render_controlled_training_request",
+    "render_determinism_smoke_toolkit_hyperparameters",
+    "render_determinism_smoke_training_request",
     "render_toolkit_hyperparameters",
     "stage_training_inputs_once",
     "toolkit_user_command_arguments",
     "validate_controlled_logical_hyperparameters",
     "validate_controlled_training_request_receipt",
+    "validate_determinism_smoke_logical_hyperparameters",
+    "validate_determinism_smoke_request_equivalence",
+    "validate_determinism_smoke_training_request_receipt",
     "validate_training_staging_receipt",
     "verify_remote_training_staging",
 )

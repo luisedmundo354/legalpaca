@@ -52,7 +52,11 @@ from retriever.sampling import (  # noqa: E402
     TRACE_SCHEMA_VERSION,
     sampling_trace_checksum,
 )
-from trainer import ControlledRetrievalTrainer  # noqa: E402
+from trainer import (  # noqa: E402
+    ControlledRetrievalTrainer,
+    DETERMINISM_SMOKE_TRAINING_SCHEDULE,
+    FULL_CONTROLLED_TRAINING_SCHEDULE,
+)
 import train_sm as controlled_train  # noqa: E402
 
 
@@ -598,11 +602,9 @@ class AccumulationContractTest(unittest.TestCase):
 
     def test_ceiling_schedule_and_exact_window_prefetch(self) -> None:
         fake_schedule = SimpleNamespace(
-            EXPECTED_EPOCHS=20,
-            EXPECTED_UPDATES_PER_EPOCH=3,
             EXPECTED_QUERIES=294,
             EXPECTED_PREPARED_BATCHES=19,
-            EXPECTED_TOTAL_UPDATES=60,
+            training_schedule=FULL_CONTROLLED_TRAINING_SCHEDULE,
             num_examples=lambda dataloader: 294,
         )
 
@@ -618,6 +620,15 @@ class AccumulationContractTest(unittest.TestCase):
             128,
         )
         self.assertEqual(values, (20, 3, 294, 5880, True, 19, 60))
+
+        fake_schedule.training_schedule = DETERMINISM_SMOKE_TRAINING_SCHEDULE
+        smoke_values = ControlledRetrievalTrainer.set_initial_training_values(
+            fake_schedule,
+            SimpleNamespace(max_steps=-1, num_train_epochs=2.0),
+            NineteenBatches(),
+            128,
+        )
+        self.assertEqual(smoke_values, (2, 3, 294, 588, True, 19, 6))
 
         reduction_results = iter([128, 128, 38])
 

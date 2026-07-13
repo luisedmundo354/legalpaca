@@ -27,7 +27,10 @@ from retriever.evaluation import (  # noqa: E402
     VALIDATION_PRIMARY_METRIC,
     VALIDATION_SECONDARY_METRIC,
 )
-from trainer import ControlledRetrievalTrainer  # noqa: E402
+from trainer import (  # noqa: E402
+    ControlledRetrievalTrainer,
+    FULL_CONTROLLED_TRAINING_SCHEDULE,
+)
 
 
 def _selection(epoch: int) -> CheckpointSelection:
@@ -63,6 +66,7 @@ class TrainerHookContractTest(unittest.TestCase):
             fake = SimpleNamespace(
                 EXPECTED_EPOCHS=20,
                 EXPECTED_TOTAL_UPDATES=60,
+                training_schedule=FULL_CONTROLLED_TRAINING_SCHEDULE,
                 state=state,
                 control=control,
                 _completed_epoch_number=completed_epoch,
@@ -175,6 +179,7 @@ class TrainerHookContractTest(unittest.TestCase):
             )
             fake = SimpleNamespace(
                 EXPECTED_EPOCHS=20,
+                training_schedule=FULL_CONTROLLED_TRAINING_SCHEDULE,
                 _pending_selection=selection,
                 _pending_best=selection,
                 store_flos=mock.Mock(),
@@ -360,6 +365,7 @@ class FreshEngineAndArtifactHelperTest(unittest.TestCase):
         fake = SimpleNamespace(
             EXPECTED_TOTAL_UPDATES=60,
             EXPECTED_WORLD_SIZE=4,
+            training_schedule=FULL_CONTROLLED_TRAINING_SCHEDULE,
             _checkpoint_manifest={"complete": True},
             _validation_metadata_store=SimpleNamespace(best=object()),
             _engine_generation=1,

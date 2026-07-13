@@ -382,6 +382,8 @@ class StrictEntrypointTest(unittest.TestCase):
         args = controlled_train.parse_args(self.valid_cli())
         self.assertEqual(args.outer_fold, 0)
         self.assertEqual(args.experiment_seed, 17)
+        self.assertEqual(args.run_kind, "controlled_full")
+        self.assertEqual((args.epochs, args.total_optimizer_updates), (20, 60))
 
         for extra in (["--unknown"], ["--outer", "1"]):
             with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
@@ -391,6 +393,41 @@ class StrictEntrypointTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {}, clear=True):
             with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 controlled_train.parse_args(matrix_only)
+
+    def test_cli_seals_the_determinism_smoke_cell_and_schedule(self) -> None:
+        smoke = self.valid_cli()
+        smoke[smoke.index("local_unique")] = "global_uniform"
+        smoke.extend(
+            [
+                "--run-kind",
+                "determinism_smoke",
+                "--epochs",
+                "2",
+                "--total-optimizer-updates",
+                "6",
+            ]
+        )
+        args = controlled_train.parse_args(smoke)
+        self.assertEqual(args.run_kind, "determinism_smoke")
+        self.assertEqual((args.epochs, args.total_optimizer_updates), (2, 6))
+
+        invalid = (
+            smoke[:-2] + ["7"],
+            smoke[: smoke.index("--epochs")] + smoke[smoke.index("--epochs") + 2 :],
+            ["1" if value == "0" else value for value in smoke],
+            ["flat_masked" if value == "structured" else value for value in smoke],
+            ["29" if value == "17" else value for value in smoke],
+        )
+        for argv in invalid:
+            with self.subTest(argv=argv), redirect_stderr(
+                io.StringIO()
+            ), self.assertRaises(SystemExit):
+                controlled_train.parse_args(argv)
+
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            controlled_train.parse_args(
+                self.valid_cli() + ["--epochs", "20", "--total-optimizer-updates", "60"]
+            )
 
     def test_frozen_experiment_and_deepspeed_configs_validate(self) -> None:
         controlled_train._validate_frozen_control_file_hashes(
