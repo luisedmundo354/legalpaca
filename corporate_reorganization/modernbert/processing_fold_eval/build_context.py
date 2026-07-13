@@ -1137,6 +1137,8 @@ def _run_offline_image_smoke(
         "--network",
         "none",
         "--read-only",
+        "--tmpfs",
+        "/tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777",
         "--entrypoint",
         "/opt/conda/bin/python",
         image_name,

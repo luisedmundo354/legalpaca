@@ -576,7 +576,7 @@ class ProcessingFoldImageContractTest(unittest.TestCase):
                 )
             smoke_command = run.call_args.args[0]
             self.assertEqual(
-                smoke_command[:8],
+                smoke_command[:10],
                 [
                     "docker",
                     "run",
@@ -585,6 +585,8 @@ class ProcessingFoldImageContractTest(unittest.TestCase):
                     "--network",
                     "none",
                     "--read-only",
+                    "--tmpfs",
+                    "/tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777",
                     "--entrypoint",
                 ],
             )
