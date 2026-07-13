@@ -455,10 +455,25 @@ def build_commit_exact_source_inventory(
     return inventory
 
 
+def _source_inventory_bytes(
+    inventory: Sequence[Mapping[str, Any]],
+) -> bytes:
+    """Encode the source identity exactly as the published bootstrap does."""
+
+    return (
+        json.dumps(
+            list(inventory),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
 def source_inventory_sha256(inventory: Sequence[Mapping[str, Any]]) -> str:
-    return strict_config.sha256_bytes(
-        strict_config.canonical_json_bytes(list(inventory))
-    )
+    return strict_config.sha256_bytes(_source_inventory_bytes(inventory))
 
 
 def _read_source_bytes(
@@ -502,7 +517,7 @@ def _write_source_archive(
             fileobj=raw_output,
             mode="wb",
             filename="",
-            compresslevel=9,
+            compresslevel=6,
             mtime=commit_epoch,
         ) as compressed:
             with tarfile.open(
@@ -610,10 +625,19 @@ def read_source_bundle(
         raise ValueError(
             f"Source bundle gzip mtime mismatch: actual={header_mtime}, expected={commit_epoch}"
         )
+    if raw[8] != 0 or raw[9] != 255:
+        raise ValueError("Source bundle gzip header is not normalized")
     try:
-        tar_payload = gzip.decompress(raw)
-    except (OSError, EOFError) as error:
+        decompressor = zlib.decompressobj(wbits=31)
+        tar_payload = decompressor.decompress(raw) + decompressor.flush()
+    except zlib.error as error:
         raise ValueError("Source bundle gzip stream is invalid") from error
+    if (
+        not decompressor.eof
+        or decompressor.unused_data
+        or decompressor.unconsumed_tail
+    ):
+        raise ValueError("Source bundle must contain exactly one gzip member")
 
     observed: list[dict[str, Any]] = []
     with tarfile.open(fileobj=io.BytesIO(tar_payload), mode="r:") as archive:

@@ -12,6 +12,7 @@ from corporate_reorganization.modernbert.tests.test_retrieval_cv_config import (
     valid_aws_config,
     valid_scientific_config,
 )
+from corporate_reorganization.modernbert.training_image import bootstrap
 
 
 class SourceBundleTest(unittest.TestCase):
@@ -108,6 +109,10 @@ class SourceBundleTest(unittest.TestCase):
             self.assertEqual(first.sha256, second.sha256)
             self.assertEqual(first.path.read_bytes(), second.path.read_bytes())
             self.assertEqual(first.inventory, second.inventory)
+            raw = first.path.read_bytes()
+            self.assertEqual(raw[:4], b"\x1f\x8b\x08\x00")
+            self.assertEqual(int.from_bytes(raw[4:8], "little"), 1_700_000_000)
+            self.assertEqual(raw[8:10], b"\x00\xff")
             self.assertEqual(
                 [record["path"] for record in first.inventory],
                 sorted(record["path"] for record in first.inventory),
@@ -123,6 +128,87 @@ class SourceBundleTest(unittest.TestCase):
                 expected_sha256=first.sha256,
             )
             self.assertEqual(deep, first)
+
+    def test_production_bundle_matches_published_bootstrap_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            (source / "pkg").mkdir(parents=True)
+            (source / "train_sm.py").write_text(
+                "raise SystemExit(0)\n", encoding="utf-8"
+            )
+            (source / "pkg" / "value.py").write_text(
+                "VALUE = 1\n", encoding="utf-8"
+            )
+            bundle = manifest.build_source_bundle(
+                source_root=source,
+                include_paths=["pkg", "train_sm.py"],
+                output_path=root / "source.tar.gz",
+                commit_epoch=1_700_000_000,
+            )
+            raw = bundle.path.read_bytes()
+            inventory, contents = bootstrap._read_normalized_archive(
+                raw,
+                expected_epoch=bundle.commit_epoch,
+                expected_inventory_sha256=bundle.inventory_sha256,
+            )
+            self.assertEqual(inventory, list(bundle.inventory))
+            self.assertEqual(
+                contents,
+                {
+                    "pkg/value.py": b"VALUE = 1\n",
+                    "train_sm.py": b"raise SystemExit(0)\n",
+                },
+            )
+
+            pretty_digest = config.sha256_bytes(
+                config.canonical_json_bytes(list(bundle.inventory))
+            )
+            self.assertNotEqual(pretty_digest, bundle.inventory_sha256)
+            with self.assertRaisesRegex(ValueError, "strict source identity"):
+                bootstrap._read_normalized_archive(
+                    raw,
+                    expected_epoch=bundle.commit_epoch,
+                    expected_inventory_sha256=pretty_digest,
+                )
+
+    def test_bundle_readback_rejects_header_and_member_attacks(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = self._source_tree(root)
+            bundle = manifest.build_source_bundle(
+                source_root=source,
+                include_paths=["pkg"],
+                output_path=root / "source.tar.gz",
+                commit_epoch=1_700_000_000,
+            )
+            raw = bundle.path.read_bytes()
+            for name, index, replacement in (
+                ("flags", 3, 8),
+                ("xfl", 8, 2),
+                ("os", 9, 3),
+            ):
+                changed = bytearray(raw)
+                changed[index] = replacement
+                path = root / f"changed-{name}.tar.gz"
+                path.write_bytes(changed)
+                with self.subTest(name=name), self.assertRaisesRegex(
+                    ValueError, "header"
+                ):
+                    manifest.read_source_bundle(
+                        path,
+                        expected_inventory=bundle.inventory,
+                        expected_commit_epoch=bundle.commit_epoch,
+                    )
+
+            concatenated = root / "concatenated.tar.gz"
+            concatenated.write_bytes(raw + raw)
+            with self.assertRaisesRegex(ValueError, "exactly one gzip member"):
+                manifest.read_source_bundle(
+                    concatenated,
+                    expected_inventory=bundle.inventory,
+                    expected_commit_epoch=bundle.commit_epoch,
+                )
 
     def test_bundle_refuses_links_overlap_specials_and_overwrite(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

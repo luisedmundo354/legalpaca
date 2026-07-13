@@ -258,7 +258,12 @@ Step-2-frozen experiment specification.
   `75c1d8fd...`; the Docker stdout formatting hash is not the identity hash.
 - config.py and manifest.py validate canonical configuration bytes, build a
   commit-exact normalized source archive without symlinks, ignored files, or
-  runtime requirements, and expand the exact ready 60+2+2 training plan.
+  runtime requirements, and expand the exact ready 60+2+2 training plan. The
+  archive is exactly one gzip member with no optional header fields, the source
+  commit epoch, level-6 `XFL=0`, and `OS=255`; its inventory identity uses the
+  compact canonical JSON encoding enforced by the published training
+  bootstrap. Host readback verifies that header, member, and inventory
+  contract before the archive can enter a plan.
 - aws.py uses low-level, one-attempt Botocore clients for immutable ECR
   publication, checked versioned-S3 primitives, Processing preflight, and one
   explicitly submitted runtime smoke. It never retries or selects a fallback.

@@ -715,6 +715,20 @@ class NetworkIsolatedTrainingBootstrapTest(unittest.TestCase):
                 expected_inventory_sha256=_source_inventory_sha256(),
             )
         valid_raw = _valid_source_archive()
+        for name, index, replacement in (
+            ("xfl", 8, 2),
+            ("os", 9, 3),
+        ):
+            changed_header = bytearray(valid_raw)
+            changed_header[index] = replacement
+            with self.subTest(name=name), self.assertRaisesRegex(
+                ValueError, "gzip header"
+            ):
+                bootstrap._read_normalized_archive(
+                    bytes(changed_header),
+                    expected_epoch=SOURCE_EPOCH,
+                    expected_inventory_sha256=_source_inventory_sha256(),
+                )
         with self.assertRaises(ValueError):
             bootstrap._read_normalized_archive(
                 valid_raw + valid_raw,
