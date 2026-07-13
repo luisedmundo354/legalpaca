@@ -93,6 +93,8 @@ def _parser() -> argparse.ArgumentParser:
     freeze_manifest.add_argument("--source-root", type=Path, required=True)
     freeze_manifest.add_argument("--source-bundle-output", type=Path, required=True)
     freeze_manifest.add_argument("--manifest-output", type=Path, required=True)
+    freeze_manifest.add_argument("--attempt-id", default="a1")
+    freeze_manifest.add_argument("--parent-manifest", type=Path)
 
     stage = commands.add_parser("stage", allow_abbrev=False)
     stage_modes = stage.add_subparsers(dest="stage_mode", required=True)
@@ -185,6 +187,30 @@ def _load_training_plan(path: Path) -> dict[str, Any]:
     return value
 
 
+def _parent_manifest_sha256(
+    *,
+    attempt_id: str,
+    parent_manifest: Path | None,
+) -> str | None:
+    attempt_number = manifest._attempt_number(attempt_id)
+    if attempt_number == 1:
+        if parent_manifest is not None:
+            raise ValueError("Attempt a1 must not name a parent manifest")
+        return None
+    if parent_manifest is None:
+        raise ValueError(f"Attempt {attempt_id} requires its parent manifest")
+    parent, parent_sha256 = manifest.read_manifest(
+        _absolute(parent_manifest, name="parent-manifest")
+    )
+    expected_parent = f"a{attempt_number - 1}"
+    actual_parent = parent["attempt"]["attempt_id"]
+    if actual_parent != expected_parent:
+        raise ValueError(
+            f"Attempt {attempt_id} requires parent {expected_parent}, got {actual_parent}"
+        )
+    return parent_sha256
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     if args.command == "build-data":
@@ -265,6 +291,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         aws_config, _ = config.load_aws_local_config(
             _absolute(args.aws_config, name="aws-config")
         )
+        parent_manifest_sha256 = _parent_manifest_sha256(
+            attempt_id=args.attempt_id,
+            parent_manifest=args.parent_manifest,
+        )
         source_root = _absolute(args.source_root, name="source-root")
         manifest.validate_scientific_source_claims(source_root, scientific)
         manifest.validate_clean_source_checkout(
@@ -292,6 +322,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 scientific_config=scientific,
                 aws_local_config=aws_config,
                 source_bundle=bundle,
+                attempt_id=args.attempt_id,
+                parent_manifest_sha256=parent_manifest_sha256,
             )
             manifest.publish_manifest_absent(manifest_output, dry)
         except BaseException:

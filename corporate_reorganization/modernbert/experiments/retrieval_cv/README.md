@@ -327,7 +327,10 @@ The ready manifest remains `retrieval_cv_training_plan`: readiness permits only
 the sealed coordinator above and does not itself stage or submit anything. The
 scientific source claim stays frozen to the exact Step-10C commit containing
 the controlled, corrected-diagnostic, and strict 2-epoch/6-update determinism
-paths. Before training, the staging command validates the bucket, proves all
+paths. The first plan defaults to `a1` with no parent. Every later freeze must
+name its canonical attempt ID and provide the immediately preceding validated
+manifest; the CLI derives and binds that parent file's SHA-256 and rejects a
+skipped or inferred ancestor. Before training, the staging command validates the bucket, proves all
 three complete versioned prefixes have never contained an object or delete
 marker, stages all twelve objects, and binds every VersionId and readback
 identity into one receipt. Immediately before each submission, the launcher

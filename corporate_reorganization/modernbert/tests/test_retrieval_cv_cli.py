@@ -64,6 +64,10 @@ class RetrievalCvCliTest(unittest.TestCase):
                 "/source.tar.gz",
                 "--manifest-output",
                 "/launch.json",
+                "--attempt-id",
+                "a2",
+                "--parent-manifest",
+                "/a1.json",
             ],
             [
                 "stage",
@@ -201,6 +205,156 @@ class RetrievalCvCliTest(unittest.TestCase):
             with self.subTest(command=arguments[:2]):
                 parsed = cli.parse_args(arguments)
                 self.assertEqual(parsed.command, arguments[0])
+
+        first_attempt = cli.parse_args(
+            [
+                "freeze-training-plan",
+                "--scientific-config",
+                "/scientific.json",
+                "--aws-config",
+                "/aws.json",
+                "--source-root",
+                "/source",
+                "--source-bundle-output",
+                "/source.tar.gz",
+                "--manifest-output",
+                "/launch.json",
+            ]
+        )
+        self.assertEqual(first_attempt.attempt_id, "a1")
+        self.assertIsNone(first_attempt.parent_manifest)
+
+    def test_attempt_parent_is_explicit_and_immediately_previous(self) -> None:
+        self.assertIsNone(
+            cli._parent_manifest_sha256(
+                attempt_id="a1",
+                parent_manifest=None,
+            )
+        )
+        with self.assertRaisesRegex(ValueError, "must not name"):
+            cli._parent_manifest_sha256(
+                attempt_id="a1",
+                parent_manifest=Path("/a0.json"),
+            )
+        with self.assertRaisesRegex(ValueError, "requires its parent"):
+            cli._parent_manifest_sha256(
+                attempt_id="a2",
+                parent_manifest=None,
+            )
+
+        digest = "a" * 64
+        with patch.object(
+            cli.manifest,
+            "read_manifest",
+            return_value=(
+                {
+                    "attempt": {
+                        "attempt_id": "a1",
+                        "parent_manifest_sha256": None,
+                    }
+                },
+                digest,
+            ),
+        ) as read:
+            self.assertEqual(
+                cli._parent_manifest_sha256(
+                    attempt_id="a2",
+                    parent_manifest=Path("/a1.json"),
+                ),
+                digest,
+            )
+        read.assert_called_once_with(Path("/a1.json"))
+
+        with patch.object(
+            cli.manifest,
+            "read_manifest",
+            return_value=(
+                {
+                    "attempt": {
+                        "attempt_id": "a1",
+                        "parent_manifest_sha256": None,
+                    }
+                },
+                digest,
+            ),
+        ), self.assertRaisesRegex(ValueError, "requires parent a2"):
+            cli._parent_manifest_sha256(
+                attempt_id="a3",
+                parent_manifest=Path("/a1.json"),
+            )
+
+    def test_freeze_dispatch_binds_attempt_and_parent_plan(self) -> None:
+        scientific = {
+            "sources": {
+                "commit_epoch": 1_700_000_000,
+                "git_commit": "1" * 40,
+                "git_tree": "2" * 40,
+                "include_paths": ["train_sm.py"],
+            }
+        }
+        aws_config = {"region": "us-east-1"}
+        bundle = Mock(name="source_bundle")
+        dry = {"manifest_type": "retrieval_cv_training_plan"}
+        arguments = [
+            "freeze-training-plan",
+            "--scientific-config",
+            "/scientific.json",
+            "--aws-config",
+            "/aws.json",
+            "--source-root",
+            "/source",
+            "--source-bundle-output",
+            "/source.tar.gz",
+            "--manifest-output",
+            "/launch.json",
+            "--attempt-id",
+            "a2",
+            "--parent-manifest",
+            "/a1.json",
+        ]
+        with (
+            patch.object(
+                cli.config,
+                "load_scientific_config",
+                return_value=(scientific, "1" * 64),
+            ),
+            patch.object(
+                cli.config,
+                "load_aws_local_config",
+                return_value=(aws_config, "2" * 64),
+            ),
+            patch.object(
+                cli,
+                "_parent_manifest_sha256",
+                return_value="3" * 64,
+            ) as parent,
+            patch.object(cli.manifest, "validate_scientific_source_claims"),
+            patch.object(cli.manifest, "validate_clean_source_checkout"),
+            patch.object(
+                cli.manifest,
+                "build_source_bundle",
+                return_value=bundle,
+            ),
+            patch.object(
+                cli.manifest,
+                "build_dry_manifest",
+                return_value=dry,
+            ) as build,
+            patch.object(cli.manifest, "publish_manifest_absent") as publish,
+        ):
+            self.assertEqual(cli.main(arguments), 0)
+        parent.assert_called_once_with(
+            attempt_id="a2",
+            parent_manifest=Path("/a1.json"),
+        )
+        build.assert_called_once_with(
+            scientific_config=scientific,
+            aws_local_config=aws_config,
+            source_bundle=bundle,
+            attempt_id="a2",
+            parent_manifest_sha256="3" * 64,
+        )
+        publish.assert_called_once_with(Path("/launch.json"), dry)
 
     def test_abbreviations_unknown_modes_and_relative_runtime_paths_fail(self) -> None:
         invalid = [

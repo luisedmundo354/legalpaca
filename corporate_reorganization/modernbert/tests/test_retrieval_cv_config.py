@@ -138,7 +138,7 @@ class CanonicalConfigTest(unittest.TestCase):
         tracked, digest = config.load_scientific_config(path)
         self.assertEqual(
             digest,
-            "b34608f30a5f1c77ba3b2d074f1e69a7922df56ffb8cd01a74112840ec8c7187",
+            "4f1ac5d4512c44234fd74cd6bae16368368aaf966ee23ecc361d8e6571d1034e",
         )
         self.assertEqual(
             {
@@ -159,6 +159,28 @@ class CanonicalConfigTest(unittest.TestCase):
             tracked["study"]["evaluation_image_digest"],
             "sha256:00feb4550b52712901933a546a561c18896304e7d72109f0a5ce49220dd12cf2",
         )
+        input_set = (
+            "s3://ir-sagemaker/arr-retrieval-cv/inputs/"
+            "input-set-c6aac769be56bded5ab13c6b761d2e7dfaa0c9d096b70b43250e5dcd36d42b41/"
+        )
+        expected_channels = {
+            "base_model": (
+                input_set
+                + "modernbert-aca85feea4adb60c4b021eb1a439aff47c844495005f2acdee1baef9d611d63d"
+            ),
+            "data": (
+                input_set
+                + "dataset-cce04197b7f92c851c8e1e0b1fc0ff3f2757911d646a0079236c03070442e4be"
+            ),
+        }
+        for template in tracked["run_templates"].values():
+            self.assertEqual(
+                {
+                    name: record["s3_uri"]
+                    for name, record in template["input_channels"].items()
+                },
+                expected_channels,
+            )
 
     def test_single_read_hash_and_canonical_round_trip(self) -> None:
         value = valid_scientific_config()
