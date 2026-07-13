@@ -599,7 +599,7 @@ class RetrievalCvCliTest(unittest.TestCase):
     def test_determinism_verify_is_local_and_publishes_once(self) -> None:
         plan = {"manifest_type": "retrieval_cv_training_plan"}
         staging = {"protocol": "retrieval_cv_training_input_staging_v2"}
-        receipt = {"schema_version": 2, "exact_match": True}
+        receipt = {"schema_version": 3, "exact_match": True}
         arguments = [
             "verify",
             "determinism-smoke",

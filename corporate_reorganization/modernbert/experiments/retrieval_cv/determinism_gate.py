@@ -12,14 +12,18 @@ from __future__ import annotations
 import copy
 import dataclasses
 import hashlib
+import itertools
 import json
+import os
+import stat
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
 
 from ...retriever.determinism import (
-    SMOKE_COMPARISON_PROTOCOL,
+    SMOKE_EXPECTED_MODEL_TENSOR_COUNT,
+    SMOKE_MODEL_STATE_PROTOCOL,
     SMOKE_RUN_KIND,
-    compare_smoke_scientific_evidence,
+    validate_smoke_scientific_evidence,
 )
 from ...retriever.determinism_artifacts import (
     DeterminismSmokeArtifactIdentity,
@@ -29,7 +33,16 @@ from ...retriever.determinism_artifacts import (
 from . import aws, manifest, training_artifacts, training_aws
 
 
-DETERMINISM_GATE_PROTOCOL = "retrieval_cv_two_replica_determinism_gate_v2"
+DETERMINISM_GATE_PROTOCOL = "retrieval_cv_two_replica_determinism_gate_v3"
+DETERMINISM_SCIENTIFIC_COMPARISON_PROTOCOL = (
+    "retrieval_cv_semantic_exact_smoke_comparison_v1"
+)
+DETERMINISM_MODEL_SERIALIZATION_COMPARISON_PROTOCOL = (
+    "retrieval_cv_safetensors_semantic_model_comparison_v1"
+)
+DETERMINISM_SAFETENSORS_SERIALIZATION_PROTOCOL = (
+    "retrieval_cv_safetensors_serialization_semantics_v1"
+)
 SMOKE_RUN_IDS = ("determinism-smoke-a", "determinism-smoke-b")
 
 _ARTIFACT_IDENTITY_FIELDS = tuple(
@@ -112,11 +125,32 @@ _SCIENTIFIC_COMPARISON_KEYS = {
     "schema_version",
     "protocol",
     "run_kind",
-    "scientific_identity_sha256",
+    "normalized_scientific_identity_sha256",
+    "replica_evidence_sha256",
+    "model_serialization",
     "replicas",
     "exact_match",
     "sha256",
 }
+_MODEL_SERIALIZATION_KEYS = {
+    "protocol",
+    "replica_model_file_sha256",
+    "common_serialization_semantics",
+    "canonical_model_state",
+}
+_SERIALIZATION_SEMANTICS_KEYS = {
+    "protocol",
+    "file_size",
+    "header_length",
+    "canonical_parsed_header_sha256",
+    "metadata_order_normalized_raw_header_sha256",
+}
+_MODEL_STATE_KEYS = {"protocol", "tensor_count", "sha256"}
+_EXPECTED_SAFETENSORS_METADATA_ITEMS = (
+    ("format", "pt"),
+    ("source", "fresh_best_engine_zero3_gathered_16bit_state"),
+    ("weight_dtype", "bfloat16"),
+)
 
 
 def _exact_dict(value: object, keys: set[str], *, name: str) -> dict[str, Any]:
@@ -270,7 +304,7 @@ def _validate_scientific_comparison(value: object) -> dict[str, Any]:
     if (
         type(receipt["schema_version"]) is not int
         or receipt["schema_version"] != 1
-        or receipt["protocol"] != SMOKE_COMPARISON_PROTOCOL
+        or receipt["protocol"] != DETERMINISM_SCIENTIFIC_COMPARISON_PROTOCOL
         or receipt["run_kind"] != SMOKE_RUN_KIND
         or type(receipt["replicas"]) is not int
         or receipt["replicas"] != 2
@@ -279,14 +313,388 @@ def _validate_scientific_comparison(value: object) -> dict[str, Any]:
     ):
         raise ValueError("Scientific comparison receipt identity changed")
     _sha256(
-        receipt["scientific_identity_sha256"],
-        name="scientific comparison identity",
+        receipt["normalized_scientific_identity_sha256"],
+        name="normalized scientific comparison identity",
+    )
+    evidence_hashes = receipt["replica_evidence_sha256"]
+    if type(evidence_hashes) is not list or len(evidence_hashes) != 2:
+        raise ValueError("Scientific comparison must bind two evidence hashes")
+    for index, digest in enumerate(evidence_hashes):
+        _sha256(digest, name=f"scientific comparison evidence {index}")
+
+    serialization = _exact_dict(
+        receipt["model_serialization"],
+        _MODEL_SERIALIZATION_KEYS,
+        name="scientific comparison model serialization",
+    )
+    if (
+        serialization["protocol"]
+        != DETERMINISM_MODEL_SERIALIZATION_COMPARISON_PROTOCOL
+    ):
+        raise ValueError("Scientific comparison model-serialization protocol changed")
+    model_hashes = serialization["replica_model_file_sha256"]
+    if type(model_hashes) is not list or len(model_hashes) != 2:
+        raise ValueError("Scientific comparison must bind two raw model-file hashes")
+    for index, digest in enumerate(model_hashes):
+        _sha256(digest, name=f"scientific comparison raw model file {index}")
+    serialization_semantics = _exact_dict(
+        serialization["common_serialization_semantics"],
+        _SERIALIZATION_SEMANTICS_KEYS,
+        name="scientific comparison common serialization semantics",
+    )
+    if (
+        serialization_semantics["protocol"]
+        != DETERMINISM_SAFETENSORS_SERIALIZATION_PROTOCOL
+    ):
+        raise ValueError("Safetensors serialization-semantics protocol changed")
+    file_size = _positive_int(
+        serialization_semantics["file_size"],
+        name="scientific comparison model file size",
+        minimum=9,
+    )
+    header_length = _positive_int(
+        serialization_semantics["header_length"],
+        name="scientific comparison safetensors header length",
+        minimum=2,
+    )
+    if header_length > file_size - 8:
+        raise ValueError("Safetensors header length exceeds the common model file size")
+    _sha256(
+        serialization_semantics["canonical_parsed_header_sha256"],
+        name="scientific comparison canonical parsed-header SHA-256",
+    )
+    _sha256(
+        serialization_semantics[
+            "metadata_order_normalized_raw_header_sha256"
+        ],
+        name="scientific comparison metadata-order-normalized raw-header SHA-256",
+    )
+    model_state = _exact_dict(
+        serialization["canonical_model_state"],
+        _MODEL_STATE_KEYS,
+        name="scientific comparison canonical model state",
+    )
+    if (
+        model_state["protocol"] != SMOKE_MODEL_STATE_PROTOCOL
+        or type(model_state["tensor_count"]) is not int
+        or model_state["tensor_count"] != SMOKE_EXPECTED_MODEL_TENSOR_COUNT
+    ):
+        raise ValueError("Scientific comparison canonical model-state identity changed")
+    _sha256(
+        model_state["sha256"],
+        name="scientific comparison canonical model-state SHA-256",
     )
     _sha256(receipt["sha256"], name="scientific comparison self hash")
     payload = {key: receipt[key] for key in receipt if key != "sha256"}
     if _determinism_self_hash(payload) != receipt["sha256"]:
         raise ValueError("Scientific comparison receipt self hash changed")
     return copy.deepcopy(receipt)
+
+
+def _validated_artifact_scientific_inputs(
+    artifact: ValidatedDeterminismSmokeArtifact,
+    *,
+    name: str,
+) -> tuple[dict[str, Any], DeterminismSmokeArtifactIdentity, dict[str, Any]]:
+    """Revalidate and bind one v1 evidence document to its parsed artifact."""
+
+    if not isinstance(artifact, ValidatedDeterminismSmokeArtifact):
+        raise TypeError(f"{name} must be one validated determinism-smoke artifact")
+    if not isinstance(artifact.identity, DeterminismSmokeArtifactIdentity):
+        raise TypeError(f"{name} identity type changed")
+    evidence = validate_smoke_scientific_evidence(artifact.scientific_evidence)
+    identity = artifact.identity
+    if evidence["sha256"] != identity.scientific_evidence_sha256:
+        raise ValueError(f"{name} evidence hash differs from its artifact identity")
+    if evidence["final_artifacts"]["model_sha256"] != identity.model_file_sha256:
+        raise ValueError(f"{name} raw model hash differs from its artifact identity")
+    canonical_model_state = copy.deepcopy(evidence["model_states"]["roundtrip"])
+    if canonical_model_state["sha256"] != identity.model_state_sha256:
+        raise ValueError(
+            f"{name} canonical model state differs from its artifact identity"
+        )
+    return evidence, identity, canonical_model_state
+
+
+def _read_exact_fd(file_descriptor: int, count: int, *, name: str) -> bytes:
+    chunks: list[bytes] = []
+    remaining = count
+    while remaining:
+        chunk = os.read(file_descriptor, remaining)
+        if not chunk:
+            raise ValueError(f"Safetensors {name} is truncated")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def _json_object_without_duplicate_keys(
+    pairs: list[tuple[str, Any]],
+) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, nested in pairs:
+        if key in value:
+            raise ValueError(f"Safetensors header contains duplicate key {key!r}")
+        value[key] = nested
+    return value
+
+
+def _stat_identity(value: os.stat_result) -> tuple[int, ...]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_mode,
+        value.st_nlink,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+
+
+def _metadata_order_normalized_raw_header(header_raw: bytes) -> bytes:
+    """Normalize only the order of the fixed safetensors metadata members."""
+
+    marker = b'"__metadata__":'
+    marker_start = header_raw.find(marker)
+    if marker_start < 0 or header_raw.find(marker, marker_start + 1) >= 0:
+        raise ValueError("Safetensors header must contain one exact metadata marker")
+    value_start = marker_start + len(marker)
+    serializations = tuple(
+        json.dumps(
+            dict(permutation),
+            ensure_ascii=False,
+            sort_keys=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        for permutation in itertools.permutations(
+            _EXPECTED_SAFETENSORS_METADATA_ITEMS
+        )
+    )
+    matches = [
+        candidate
+        for candidate in serializations
+        if header_raw.startswith(candidate, value_start)
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            "Safetensors metadata serialization differs beyond member ordering"
+        )
+    observed = matches[0]
+    canonical = serializations[0]
+    if len(observed) != len(canonical):
+        raise RuntimeError("Safetensors metadata permutations changed byte length")
+    value_end = value_start + len(observed)
+    return header_raw[:value_start] + canonical + header_raw[value_end:]
+
+
+def _safetensors_serialization_semantics(
+    path: Path,
+    *,
+    expected_raw_sha256: str,
+) -> dict[str, Any]:
+    """Hash and parse one model through the same non-following file descriptor."""
+
+    if not isinstance(path, Path) or not path.is_absolute():
+        raise TypeError("Safetensors model path must be one absolute pathlib.Path")
+    expected_digest = _sha256(
+        expected_raw_sha256,
+        name="expected raw safetensors SHA-256",
+    )
+    try:
+        path_before = os.lstat(path)
+    except OSError as error:
+        raise ValueError("Safetensors model path cannot be inspected") from error
+    if (
+        not stat.S_ISREG(path_before.st_mode)
+        or path_before.st_nlink != 1
+        or path.resolve(strict=True) != path
+    ):
+        raise ValueError(
+            "Safetensors model must be one strict-resolved single-link regular file"
+        )
+    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+    file_descriptor = os.open(path, flags)
+    try:
+        before = os.fstat(file_descriptor)
+        if _stat_identity(before) != _stat_identity(path_before):
+            raise RuntimeError("Safetensors path identity changed before it was opened")
+        if before.st_size < 9:
+            raise ValueError("Safetensors model must be one non-empty regular file")
+        prefix = _read_exact_fd(file_descriptor, 8, name="header length")
+        header_length = int.from_bytes(prefix, byteorder="little", signed=False)
+        if header_length < 2 or header_length > before.st_size - 8:
+            raise ValueError("Safetensors header length is invalid")
+        header_raw = _read_exact_fd(
+            file_descriptor,
+            header_length,
+            name="header",
+        )
+        digest = hashlib.sha256()
+        digest.update(prefix)
+        digest.update(header_raw)
+        bytes_read = 8 + header_length
+        while True:
+            chunk = os.read(file_descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+            bytes_read += len(chunk)
+        after = os.fstat(file_descriptor)
+        try:
+            path_after = os.lstat(path)
+        except OSError as error:
+            raise RuntimeError(
+                "Safetensors path disappeared while it was read"
+            ) from error
+        if (
+            _stat_identity(after) != _stat_identity(path_after)
+            or path.resolve(strict=True) != path
+        ):
+            raise RuntimeError("Safetensors path identity changed while it was read")
+    finally:
+        os.close(file_descriptor)
+
+    if _stat_identity(before) != _stat_identity(after):
+        raise RuntimeError("Safetensors file bytes changed while they were read")
+    if bytes_read != before.st_size:
+        raise RuntimeError("Safetensors byte count differs from its open-file size")
+    if digest.hexdigest() != expected_digest:
+        raise ValueError("Raw safetensors SHA-256 differs from artifact identity")
+    try:
+        parsed_header = json.loads(
+            header_raw,
+            object_pairs_hook=_json_object_without_duplicate_keys,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("Safetensors header is not valid JSON") from error
+    if type(parsed_header) is not dict:
+        raise TypeError("Safetensors header must be one JSON object")
+    if parsed_header.get("__metadata__") != dict(
+        _EXPECTED_SAFETENSORS_METADATA_ITEMS
+    ):
+        raise ValueError("Safetensors semantic metadata changed")
+    normalized_raw_header = _metadata_order_normalized_raw_header(header_raw)
+    return {
+        "protocol": DETERMINISM_SAFETENSORS_SERIALIZATION_PROTOCOL,
+        "file_size": before.st_size,
+        "header_length": header_length,
+        "canonical_parsed_header_sha256": _document_sha256(parsed_header),
+        "metadata_order_normalized_raw_header_sha256": hashlib.sha256(
+            normalized_raw_header
+        ).hexdigest(),
+    }
+
+
+def _normalized_scientific_payload(
+    evidence: Mapping[str, Any],
+    *,
+    canonical_model_state: Mapping[str, Any],
+    serialization_semantics: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Remove only the raw model-file hash from one validated v1 payload."""
+
+    scientific_evidence = {
+        key: copy.deepcopy(value)
+        for key, value in evidence.items()
+        if key != "sha256"
+    }
+    final_artifacts = scientific_evidence["final_artifacts"]
+    if type(final_artifacts) is not dict:
+        raise TypeError("Validated final artifacts must remain one exact dict")
+    raw_model_sha256 = final_artifacts.pop("model_sha256", None)
+    _sha256(raw_model_sha256, name="normalized source raw model SHA-256")
+    return {
+        "protocol": DETERMINISM_MODEL_SERIALIZATION_COMPARISON_PROTOCOL,
+        "scientific_evidence": scientific_evidence,
+        "canonical_final_model_state": copy.deepcopy(dict(canonical_model_state)),
+        "final_model_serialization_semantics": copy.deepcopy(
+            dict(serialization_semantics)
+        ),
+    }
+
+
+def _compare_semantic_exact_scientific_evidence(
+    first: ValidatedDeterminismSmokeArtifact,
+    second: ValidatedDeterminismSmokeArtifact,
+) -> dict[str, Any]:
+    """Compare fully validated artifacts, normalizing only safetensors JSON order.
+
+    The artifact validator has already parsed every safetensors descriptor,
+    required the fixed metadata mapping, covered the complete payload, and
+    recomputed the canonical BF16 tensor-state hash.  Raw file and original v1
+    evidence hashes remain provenance in the returned receipt.
+    """
+
+    first_evidence, first_identity, first_state = (
+        _validated_artifact_scientific_inputs(first, name="first artifact")
+    )
+    second_evidence, second_identity, second_state = (
+        _validated_artifact_scientific_inputs(second, name="second artifact")
+    )
+    if first_state != second_state:
+        raise RuntimeError("Determinism smoke canonical final model states differ")
+    first_serialization = _safetensors_serialization_semantics(
+        first.model_path,
+        expected_raw_sha256=first_identity.model_file_sha256,
+    )
+    second_serialization = _safetensors_serialization_semantics(
+        second.model_path,
+        expected_raw_sha256=second_identity.model_file_sha256,
+    )
+    if first_serialization != second_serialization:
+        raise RuntimeError(
+            "Determinism smoke safetensors serialization semantics differ"
+        )
+
+    first_normalized = _normalized_scientific_payload(
+        first_evidence,
+        canonical_model_state=first_state,
+        serialization_semantics=first_serialization,
+    )
+    second_normalized = _normalized_scientific_payload(
+        second_evidence,
+        canonical_model_state=second_state,
+        serialization_semantics=second_serialization,
+    )
+    if first_normalized != second_normalized:
+        first_payload = first_normalized["scientific_evidence"]
+        second_payload = second_normalized["scientific_evidence"]
+        changed = [
+            key
+            for key in sorted(first_payload)
+            if first_payload[key] != second_payload[key]
+        ]
+        raise RuntimeError(
+            f"Determinism smoke scientific evidence differs: {changed}"
+        )
+
+    payload = {
+        "schema_version": 1,
+        "protocol": DETERMINISM_SCIENTIFIC_COMPARISON_PROTOCOL,
+        "run_kind": SMOKE_RUN_KIND,
+        "normalized_scientific_identity_sha256": _determinism_self_hash(
+            first_normalized
+        ),
+        "replica_evidence_sha256": [
+            first_identity.scientific_evidence_sha256,
+            second_identity.scientific_evidence_sha256,
+        ],
+        "model_serialization": {
+            "protocol": DETERMINISM_MODEL_SERIALIZATION_COMPARISON_PROTOCOL,
+            "replica_model_file_sha256": [
+                first_identity.model_file_sha256,
+                second_identity.model_file_sha256,
+            ],
+            "common_serialization_semantics": first_serialization,
+            "canonical_model_state": first_state,
+        },
+        "replicas": 2,
+        "exact_match": True,
+    }
+    return _validate_scientific_comparison(
+        {**payload, "sha256": _determinism_self_hash(payload)}
+    )
 
 
 def _validate_remote_object(value: object, *, name: str) -> dict[str, Any]:
@@ -357,7 +765,7 @@ def _validate_gate_shape(value: object) -> dict[str, Any]:
     receipt = _exact_dict(value, _GATE_KEYS, name="determinism gate receipt")
     if (
         type(receipt["schema_version"]) is not int
-        or receipt["schema_version"] != 2
+        or receipt["schema_version"] != 3
         or receipt["protocol"] != DETERMINISM_GATE_PROTOCOL
         or type(receipt["exact_match"]) is not bool
         or receipt["exact_match"] is not True
@@ -383,6 +791,8 @@ def _validate_gate_shape(value: object) -> dict[str, Any]:
     remote_coordinates: list[tuple[str, str, str]] = []
     remote_classes: list[dict[str, Any]] = []
     evidence_hashes: list[str] = []
+    model_file_hashes: list[str] = []
+    model_state_hashes: list[str] = []
     for index, (raw, run_id) in enumerate(zip(replicas, SMOKE_RUN_IDS)):
         replica = _exact_dict(raw, _REPLICA_KEYS, name=f"gate replica {index}")
         if replica["run_id"] != run_id:
@@ -476,6 +886,8 @@ def _validate_gate_shape(value: object) -> dict[str, Any]:
         if identity["artifact_manifest_sha256"] != manifest_sha256:
             raise ValueError("Gate artifact identity differs from its commit marker")
         evidence_hashes.append(identity["scientific_evidence_sha256"])
+        model_file_hashes.append(identity["model_file_sha256"])
+        model_state_hashes.append(identity["model_state_sha256"])
 
     for values, name in (
         (receipt_paths, "acquisition receipt paths"),
@@ -490,11 +902,17 @@ def _validate_gate_shape(value: object) -> dict[str, Any]:
             raise ValueError(f"Gate replicas must use two distinct {name}")
     if remote_classes[0] != remote_classes[1]:
         raise ValueError("Gate replica remote-object wire contracts differ")
-    if any(
-        digest != comparison["scientific_identity_sha256"]
-        for digest in evidence_hashes
-    ):
+    if evidence_hashes != comparison["replica_evidence_sha256"]:
         raise ValueError("Artifact evidence identities differ from scientific comparison")
+    model_serialization = comparison["model_serialization"]
+    if model_file_hashes != model_serialization["replica_model_file_sha256"]:
+        raise ValueError("Artifact raw model-file identities differ from comparison")
+    canonical_model_state = model_serialization["canonical_model_state"]
+    if any(
+        digest != canonical_model_state["sha256"]
+        for digest in model_state_hashes
+    ):
+        raise ValueError("Artifact canonical model states differ from comparison")
 
     _sha256(receipt["receipt_sha256"], name="determinism gate self hash")
     payload = {
@@ -643,9 +1061,9 @@ def _build_determinism_gate_receipt(
     )
     request_equivalence = _validate_request_equivalence(request_equivalence)
 
-    scientific_comparison = compare_smoke_scientific_evidence(
-        acquisitions[SMOKE_RUN_IDS[0]].validated_artifact.scientific_evidence,
-        acquisitions[SMOKE_RUN_IDS[1]].validated_artifact.scientific_evidence,
+    scientific_comparison = _compare_semantic_exact_scientific_evidence(
+        acquisitions[SMOKE_RUN_IDS[0]].validated_artifact,
+        acquisitions[SMOKE_RUN_IDS[1]].validated_artifact,
     )
     scientific_comparison = _validate_scientific_comparison(scientific_comparison)
 
@@ -714,7 +1132,7 @@ def _build_determinism_gate_receipt(
         )
 
     payload = {
-        "schema_version": 2,
+        "schema_version": 3,
         "protocol": DETERMINISM_GATE_PROTOCOL,
         "plan_sha256": _document_sha256(plan),
         "staging_receipt_sha256": _document_sha256(staged),

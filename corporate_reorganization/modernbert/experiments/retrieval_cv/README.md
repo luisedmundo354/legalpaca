@@ -327,11 +327,28 @@ Step-2-frozen experiment specification.
   candidate links, all 152 rank/microbatch loss records with exact float32 bit
   patterns, both validation decisions, the verified reload, and final artifact
   identities. `retriever/determinism_artifacts.py` independently parses the
-  safetensors bytes and recomputes the selected state. `determinism_gate.py`
-  validates both externally identified artifacts and rejects any scientific
-  mismatch without a tolerance. The v2 gate accepts only the two complete
-  acquisition receipts, recursively revalidates each launch/terminal/S3/local
-  chain, derives both request receipts itself, and records the two remote
+  safetensors bytes, requires the fixed semantic metadata, and recomputes the
+  selected state. `determinism_gate.py` validates both externally identified
+  artifacts and rejects any scientific mismatch without a tolerance. The v3
+  host-only gate compares the final model by that canonical tensor-state
+  identity rather than by the raw safetensors file SHA-256, because
+  safetensors 0.5.3 may emit semantically identical metadata-map keys in a
+  different JSON order. It reopens each model through one non-following file
+  descriptor, revalidates that the path still names that exact single-link
+  file, verifies the complete raw SHA-256 against the validated artifact, and
+  requires equal file size, header length, canonical parsed header (all
+  metadata and tensor descriptors), metadata-order-normalized raw header, and
+  canonical tensor state. The raw header remains byte-exact everywhere except
+  for permutation of the three fixed `__metadata__` members. The frozen
+  producer and its v1 scientific-evidence contract remain unchanged. This is
+  the only normalized field: all tensor names, dtypes, shapes, offsets, payload
+  bytes, semantic metadata, and every other scientific/final-artifact identity
+  remain exact. The comparison receipt records both original evidence hashes,
+  both raw model-file hashes, the common serialization semantics, the common
+  canonical model state, and a new normalized scientific identity. The gate
+  accepts only the two complete acquisition receipts, recursively revalidates
+  each launch/terminal/S3/local chain, derives both request receipts itself,
+  and records the two remote
   VersionIds, archive hashes, tree inventories, and artifact identities. It
   has no loose-root or user-supplied manifest-hash interface. Neither module
   submits a job.
@@ -373,7 +390,7 @@ After a successful terminal receipt, `acquire determinism-smoke` writes a fixed
 `model.tar.gz`, `artifact/`, and `acquisition_receipt.json` layout beneath one
 new absolute output directory. `verify determinism-smoke` accepts only the A
 and B acquisition-receipt paths plus their common plan and staging receipt and
-publishes one canonical, absent-only v2 gate receipt. Acquisition never writes
+publishes one canonical, absent-only v3 gate receipt. Acquisition never writes
 S3, and gate verification constructs no AWS client.
 
 The immediate Processing smoke is
