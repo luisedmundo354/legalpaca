@@ -301,6 +301,17 @@ Step-2-frozen experiment specification.
   is success, while Failed and Stopped are sealed as explicit failure evidence
   before the CLI fails loudly. It has no waiter, mutation retry, resource
   fallback, or automatic reconciliation path.
+- training_artifacts.py is the read-only post-training acquisition boundary.
+  It accepts only a recursively validated successful terminal chain, discovers
+  exactly one current version at the request-derived model key, downloads that
+  exact VersionId, computes the complete archive SHA-256, and publishes one
+  absent local bundle containing the archive, safely extracted artifact, and
+  acquisition receipt. Publication is atomic and no-replace; multipart ETags
+  and composite service checksums are recorded but never treated as a
+  whole-object content hash. Its physical gzip/PAX/TAR parser rejects multiple
+  members, trailing data, path aliases or traversal, links, special files,
+  sparse records, duplicate paths, and nonzero padding before the existing
+  strict smoke-artifact validator can accept the result.
 - Controlled artifact expectations and exported model identities carry the
   exact plan SHA-256, staging-receipt SHA-256, and five-field source-bundle
   identity in addition to the derived/base image, runtime, contract, and
@@ -318,7 +329,12 @@ Step-2-frozen experiment specification.
   identities. `retriever/determinism_artifacts.py` independently parses the
   safetensors bytes and recomputes the selected state. `determinism_gate.py`
   validates both externally identified artifacts and rejects any scientific
-  mismatch without a tolerance. Neither module submits a job.
+  mismatch without a tolerance. The v2 gate accepts only the two complete
+  acquisition receipts, recursively revalidates each launch/terminal/S3/local
+  chain, derives both request receipts itself, and records the two remote
+  VersionIds, archive hashes, tree inventories, and artifact identities. It
+  has no loose-root or user-supplied manifest-hash interface. Neither module
+  submits a job.
 - aggregate.py performs only strict five-fold completeness and artifact
   readback. Statistical aggregation, intervals, contrasts, and figures remain
   Step 12.
@@ -353,6 +369,12 @@ field. The verifier normalizes only that omission, or a present exact
 malformed object, extra field, non-string value, whitespace, or wrong URI still
 fails. A Completed job must report the exact request-derived nonempty model URI
 in addition to its complete timing evidence.
+After a successful terminal receipt, `acquire determinism-smoke` writes a fixed
+`model.tar.gz`, `artifact/`, and `acquisition_receipt.json` layout beneath one
+new absolute output directory. `verify determinism-smoke` accepts only the A
+and B acquisition-receipt paths plus their common plan and staging receipt and
+publishes one canonical, absent-only v2 gate receipt. Acquisition never writes
+S3, and gate verification constructs no AWS client.
 
 The immediate Processing smoke is
 `evaluation_image_runtime_smoke_v1`. It validates account-local digest pull,

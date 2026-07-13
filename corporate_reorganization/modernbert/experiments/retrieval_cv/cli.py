@@ -7,7 +7,17 @@ import os
 from pathlib import Path
 from typing import Any, Sequence
 
-from . import aggregate, aws, config, folds, manifest, training_aws, training_launch
+from . import (
+    aggregate,
+    aws,
+    config,
+    determinism_gate,
+    folds,
+    manifest,
+    training_artifacts,
+    training_aws,
+    training_launch,
+)
 
 
 def _absolute(path: Path, *, name: str) -> Path:
@@ -143,6 +153,18 @@ def _parser() -> argparse.ArgumentParser:
     training_status.add_argument("--submission-receipt", type=Path, required=True)
     training_status.add_argument("--output", type=Path, required=True)
 
+    acquire = commands.add_parser("acquire", allow_abbrev=False)
+    acquire_modes = acquire.add_subparsers(dest="acquire_mode", required=True)
+    acquire_smoke = acquire_modes.add_parser(
+        "determinism-smoke", allow_abbrev=False
+    )
+    acquire_smoke.add_argument("--manifest", type=Path, required=True)
+    acquire_smoke.add_argument("--staging-receipt", type=Path, required=True)
+    acquire_smoke.add_argument("--preflight-receipt", type=Path, required=True)
+    acquire_smoke.add_argument("--submission-receipt", type=Path, required=True)
+    acquire_smoke.add_argument("--terminal-receipt", type=Path, required=True)
+    acquire_smoke.add_argument("--output-dir", type=Path, required=True)
+
     evaluate = commands.add_parser("evaluate", allow_abbrev=False)
     evaluate_modes = evaluate.add_subparsers(dest="evaluate_mode", required=True)
     runtime_evaluate = evaluate_modes.add_parser("runtime-smoke", allow_abbrev=False)
@@ -170,6 +192,18 @@ def _parser() -> argparse.ArgumentParser:
     verify_training.add_argument("--preflight-receipt", type=Path, required=True)
     verify_training.add_argument("--submission-receipt", type=Path, required=True)
     verify_training.add_argument("--output", type=Path, required=True)
+    verify_determinism = verify_modes.add_parser(
+        "determinism-smoke", allow_abbrev=False
+    )
+    verify_determinism.add_argument("--manifest", type=Path, required=True)
+    verify_determinism.add_argument("--staging-receipt", type=Path, required=True)
+    verify_determinism.add_argument(
+        "--acquisition-receipt-a", type=Path, required=True
+    )
+    verify_determinism.add_argument(
+        "--acquisition-receipt-b", type=Path, required=True
+    )
+    verify_determinism.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -452,6 +486,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         _publish_json(output, verified)
         return 0
+    if args.command == "acquire" and args.acquire_mode == "determinism-smoke":
+        output = _absolute(args.output_dir, name="output-dir")
+        _require_absent_output(output)
+        plan = _load_training_plan(args.manifest)
+        staging = _load_receipt(args.staging_receipt)
+        preflight = _load_receipt(args.preflight_receipt)
+        submission = _load_receipt(args.submission_receipt)
+        terminal = _load_receipt(args.terminal_receipt)
+        clients = aws.make_clients(region=plan["infrastructure"]["region"])
+        training_artifacts.acquire_completed_determinism_smoke_artifact(
+            clients.s3,
+            training_plan=plan,
+            staging_receipt=staging,
+            preflight_receipt=preflight,
+            submission_receipt=submission,
+            terminal_receipt=terminal,
+            output_bundle=output,
+        )
+        return 0
     if args.command == "aggregate":
         output = _absolute(args.output, name="output")
         _require_absent_output(output)
@@ -508,6 +561,27 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "Training job ended unsuccessfully: "
                 f"{terminal['terminal_status']}"
             )
+        return 0
+    if args.command == "verify" and args.verify_mode == "determinism-smoke":
+        output = _absolute(args.output, name="output")
+        _require_absent_output(output)
+        plan = _load_training_plan(args.manifest)
+        staging = _load_receipt(args.staging_receipt)
+        receipt = determinism_gate.run_determinism_gate(
+            training_plan=plan,
+            staging_receipt=staging,
+            acquisition_receipt_paths_by_run={
+                "determinism-smoke-a": _absolute(
+                    args.acquisition_receipt_a,
+                    name="acquisition-receipt-a",
+                ),
+                "determinism-smoke-b": _absolute(
+                    args.acquisition_receipt_b,
+                    name="acquisition-receipt-b",
+                ),
+            },
+        )
+        _publish_json(output, receipt)
         return 0
     raise ValueError(f"Unsupported command/mode: {args}")
 

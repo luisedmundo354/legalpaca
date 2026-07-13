@@ -154,6 +154,22 @@ class RetrievalCvCliTest(unittest.TestCase):
                 "/status.json",
             ],
             [
+                "acquire",
+                "determinism-smoke",
+                "--manifest",
+                "/launch.json",
+                "--staging-receipt",
+                "/staging.json",
+                "--preflight-receipt",
+                "/preflight.json",
+                "--submission-receipt",
+                "/submission.json",
+                "--terminal-receipt",
+                "/terminal.json",
+                "--output-dir",
+                "/artifact",
+            ],
+            [
                 "evaluate",
                 "runtime-smoke",
                 "--preflight-receipt",
@@ -199,6 +215,20 @@ class RetrievalCvCliTest(unittest.TestCase):
                 "/submission.json",
                 "--output",
                 "/terminal.json",
+            ],
+            [
+                "verify",
+                "determinism-smoke",
+                "--manifest",
+                "/launch.json",
+                "--staging-receipt",
+                "/staging.json",
+                "--acquisition-receipt-a",
+                "/artifact-a/acquisition_receipt.json",
+                "--acquisition-receipt-b",
+                "/artifact-b/acquisition_receipt.json",
+                "--output",
+                "/determinism.json",
             ],
         ]
         for arguments in fixtures:
@@ -521,6 +551,97 @@ class RetrievalCvCliTest(unittest.TestCase):
                         ]
                     )
             make_clients.assert_not_called()
+
+    def test_acquisition_checks_absent_output_before_remote_operation(self) -> None:
+        plan = {"infrastructure": {"region": "us-east-1"}}
+        arguments = [
+            "acquire",
+            "determinism-smoke",
+            "--manifest",
+            "/plan.json",
+            "--staging-receipt",
+            "/staging.json",
+            "--preflight-receipt",
+            "/preflight.json",
+            "--submission-receipt",
+            "/submission.json",
+            "--terminal-receipt",
+            "/terminal.json",
+            "--output-dir",
+            "/artifact",
+        ]
+        order: list[str] = []
+
+        def absent(_path: Path) -> None:
+            order.append("absent")
+
+        def acquire(*_args: object, **_kwargs: object) -> dict[str, object]:
+            order.append("remote")
+            return {"schema_version": 1}
+
+        with (
+            patch.object(cli, "_require_absent_output", side_effect=absent),
+            patch.object(cli, "_load_training_plan", return_value=plan),
+            patch.object(cli, "_load_receipt", return_value={"schema_version": 1}),
+            patch.object(cli.aws, "make_clients", return_value=Mock()),
+            patch.object(
+                cli.training_artifacts,
+                "acquire_completed_determinism_smoke_artifact",
+                side_effect=acquire,
+            ) as operation,
+            patch.object(cli, "_publish_json") as publish,
+        ):
+            self.assertEqual(cli.main(arguments), 0)
+        self.assertEqual(order, ["absent", "remote"])
+        operation.assert_called_once()
+        publish.assert_not_called()
+
+    def test_determinism_verify_is_local_and_publishes_once(self) -> None:
+        plan = {"manifest_type": "retrieval_cv_training_plan"}
+        staging = {"protocol": "retrieval_cv_training_input_staging_v2"}
+        receipt = {"schema_version": 2, "exact_match": True}
+        arguments = [
+            "verify",
+            "determinism-smoke",
+            "--manifest",
+            "/plan.json",
+            "--staging-receipt",
+            "/staging.json",
+            "--acquisition-receipt-a",
+            "/artifact-a/acquisition_receipt.json",
+            "--acquisition-receipt-b",
+            "/artifact-b/acquisition_receipt.json",
+            "--output",
+            "/determinism.json",
+        ]
+        with (
+            patch.object(cli, "_require_absent_output") as absent,
+            patch.object(cli, "_load_training_plan", return_value=plan),
+            patch.object(cli, "_load_receipt", return_value=staging),
+            patch.object(cli.aws, "make_clients") as make_clients,
+            patch.object(
+                cli.determinism_gate,
+                "run_determinism_gate",
+                return_value=receipt,
+            ) as gate,
+            patch.object(cli, "_publish_json") as publish,
+        ):
+            self.assertEqual(cli.main(arguments), 0)
+        absent.assert_called_once_with(Path("/determinism.json"))
+        make_clients.assert_not_called()
+        gate.assert_called_once_with(
+            training_plan=plan,
+            staging_receipt=staging,
+            acquisition_receipt_paths_by_run={
+                "determinism-smoke-a": Path(
+                    "/artifact-a/acquisition_receipt.json"
+                ),
+                "determinism-smoke-b": Path(
+                    "/artifact-b/acquisition_receipt.json"
+                ),
+            },
+        )
+        publish.assert_called_once_with(Path("/determinism.json"), receipt)
 
     def test_training_verify_publishes_failure_evidence_then_fails_loudly(
         self,
