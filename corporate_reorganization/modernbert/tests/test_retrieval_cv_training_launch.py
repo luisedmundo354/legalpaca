@@ -246,7 +246,6 @@ class TrainingLaunchTest(unittest.TestCase):
             {
                 "CreationTime": created,
                 "LastModifiedTime": created + timedelta(seconds=1),
-                "ModelArtifacts": {"S3ModelArtifacts": ""},
                 "SecondaryStatus": "Starting",
                 "TrainingJobArn": (
                     f"arn:aws:sagemaker:{REGION}:{ACCOUNT}:training-job/"
@@ -688,6 +687,167 @@ class TrainingLaunchTest(unittest.TestCase):
             staging_receipt=self.staging,
             preflight_receipt=preflight,
         )
+
+    def test_model_artifacts_missing_and_empty_normalize_by_status(self) -> None:
+        clients = self._clients()
+        with self._remote_dependencies():
+            preflight = self._preflight(clients)
+        request_receipt = preflight["request_receipt"]
+        request = request_receipt["request"]
+        job_arn = (
+            f"arn:aws:sagemaker:{REGION}:{ACCOUNT}:training-job/"
+            f"{request['TrainingJobName']}"
+        )
+        tags = sorted(
+            copy.deepcopy(request["Tags"]),
+            key=lambda tag: (tag["Key"], tag["Value"]),
+        )
+        for status_name in (
+            "InProgress",
+            "Stopping",
+            "Failed",
+            "Stopped",
+            "Completed",
+        ):
+            normalized = []
+            for representation in ("missing", "empty"):
+                with self.subTest(
+                    status=status_name, representation=representation
+                ):
+                    described = self._describe_response(
+                        preflight, status=status_name
+                    )
+                    if representation == "missing":
+                        described.pop("ModelArtifacts", None)
+                    else:
+                        described["ModelArtifacts"] = {"S3ModelArtifacts": ""}
+                    original = copy.deepcopy(described)
+                    if status_name == "Completed":
+                        with self.assertRaisesRegex(
+                            ValueError, "lacks exact success evidence"
+                        ):
+                            training_launch._snapshot_from_remote(
+                                described,
+                                tags=tags,
+                                request_receipt=request_receipt,
+                                job_arn=job_arn,
+                            )
+                    else:
+                        snapshot = training_launch._snapshot_from_remote(
+                            described,
+                            tags=tags,
+                            request_receipt=request_receipt,
+                            job_arn=job_arn,
+                        )
+                        self.assertIsNone(snapshot["model_artifact_s3_uri"])
+                        normalized.append(snapshot)
+                    self.assertEqual(described, original)
+            if status_name != "Completed":
+                self.assertEqual(normalized[0], normalized[1])
+
+    def test_model_artifacts_exact_uri_is_valid_for_every_status(self) -> None:
+        clients = self._clients()
+        with self._remote_dependencies():
+            preflight = self._preflight(clients)
+        request_receipt = preflight["request_receipt"]
+        request = request_receipt["request"]
+        job_arn = (
+            f"arn:aws:sagemaker:{REGION}:{ACCOUNT}:training-job/"
+            f"{request['TrainingJobName']}"
+        )
+        tags = sorted(
+            copy.deepcopy(request["Tags"]),
+            key=lambda tag: (tag["Key"], tag["Value"]),
+        )
+        expected_uri = (
+            f"{request['OutputDataConfig']['S3OutputPath']}/"
+            f"{request['TrainingJobName']}/output/model.tar.gz"
+        )
+        for status_name in (
+            "InProgress",
+            "Stopping",
+            "Failed",
+            "Stopped",
+            "Completed",
+        ):
+            with self.subTest(status=status_name):
+                described = self._describe_response(preflight, status=status_name)
+                described["ModelArtifacts"] = {
+                    "S3ModelArtifacts": expected_uri
+                }
+                snapshot = training_launch._snapshot_from_remote(
+                    described,
+                    tags=tags,
+                    request_receipt=request_receipt,
+                    job_arn=job_arn,
+                )
+                self.assertEqual(snapshot["model_artifact_s3_uri"], expected_uri)
+
+    def test_model_artifacts_malformed_or_wrong_uri_fails_loudly(self) -> None:
+        clients = self._clients()
+        with self._remote_dependencies():
+            preflight = self._preflight(clients)
+        request_receipt = preflight["request_receipt"]
+        request = request_receipt["request"]
+        job_arn = (
+            f"arn:aws:sagemaker:{REGION}:{ACCOUNT}:training-job/"
+            f"{request['TrainingJobName']}"
+        )
+        tags = sorted(
+            copy.deepcopy(request["Tags"]),
+            key=lambda tag: (tag["Key"], tag["Value"]),
+        )
+        malformed = (
+            None,
+            {},
+            "",
+            {"S3ModelArtifacts": None},
+            {"S3ModelArtifacts": []},
+            {"S3ModelArtifacts": False},
+            {"S3ModelArtifacts": 0},
+            {"S3ModelArtifacts": " "},
+            {"S3ModelArtifacts": "", "Unexpected": ""},
+        )
+        for value in malformed:
+            with self.subTest(value=value):
+                described = self._describe_response(preflight)
+                described["ModelArtifacts"] = copy.deepcopy(value)
+                original = copy.deepcopy(described)
+                with self.assertRaises(ValueError):
+                    training_launch._snapshot_from_remote(
+                        described,
+                        tags=tags,
+                        request_receipt=request_receipt,
+                        job_arn=job_arn,
+                    )
+                self.assertEqual(described, original)
+        wrong_uris = (
+            "https://ir-sagemaker/output/model.tar.gz",
+            "s3://other-bucket/output/model.tar.gz",
+            f"{request['OutputDataConfig']['S3OutputPath']}/wrong/output/model.tar.gz",
+        )
+        for status_name in (
+            "InProgress",
+            "Stopping",
+            "Failed",
+            "Stopped",
+            "Completed",
+        ):
+            for wrong_uri in wrong_uris:
+                with self.subTest(status=status_name, wrong_uri=wrong_uri):
+                    described = self._describe_response(
+                        preflight, status=status_name
+                    )
+                    described["ModelArtifacts"] = {
+                        "S3ModelArtifacts": wrong_uri
+                    }
+                    with self.assertRaises(ValueError):
+                        training_launch._snapshot_from_remote(
+                            described,
+                            tags=tags,
+                            request_receipt=request_receipt,
+                            job_arn=job_arn,
+                        )
 
     def test_ambiguous_create_exception_propagates_without_reconciliation(self) -> None:
         clients = self._clients()

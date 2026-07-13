@@ -347,6 +347,12 @@ For immediate and terminal request readback, SageMaker may echo an omitted
 output `KmsKeyId` as the empty string that denotes its default S3 key. The
 verifier removes only that exact empty service-default field before comparison;
 a nonempty KMS key or any other added, omitted, or changed field still fails.
+Before an artifact is available, SageMaker may omit the outer `ModelArtifacts`
+field. The verifier normalizes only that omission, or a present exact
+`S3ModelArtifacts` empty string, to a null snapshot URI. An explicit null,
+malformed object, extra field, non-string value, whitespace, or wrong URI still
+fails. A Completed job must report the exact request-derived nonempty model URI
+in addition to its complete timing evidence.
 
 The immediate Processing smoke is
 `evaluation_image_runtime_smoke_v1`. It validates account-local digest pull,

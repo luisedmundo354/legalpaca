@@ -766,11 +766,27 @@ def _snapshot_from_remote(
             request[field]
         ):
             raise ValueError(f"DescribeTrainingJob changed request field {field}")
-    artifacts = _exact_object(
-        response.get("ModelArtifacts"),
-        {"S3ModelArtifacts"},
-        name="DescribeTrainingJob.ModelArtifacts",
-    )
+    if "ModelArtifacts" not in response:
+        model_artifact_s3_uri = None
+    else:
+        artifacts = _exact_object(
+            response["ModelArtifacts"],
+            {"S3ModelArtifacts"},
+            name="DescribeTrainingJob.ModelArtifacts",
+        )
+        raw_model_artifact_s3_uri = artifacts["S3ModelArtifacts"]
+        if type(raw_model_artifact_s3_uri) is not str:
+            raise ValueError(
+                "ModelArtifacts.S3ModelArtifacts must be one exact string"
+            )
+        model_artifact_s3_uri = (
+            None
+            if raw_model_artifact_s3_uri == ""
+            else _exact_string(
+                raw_model_artifact_s3_uri,
+                name="ModelArtifacts.S3ModelArtifacts",
+            )
+        )
     snapshot = {
         "billable_time_seconds": _optional_remote_int(
             response, "BillableTimeInSeconds"
@@ -784,13 +800,7 @@ def _snapshot_from_remote(
         "last_modified_time": _optional_remote_datetime(
             response, "LastModifiedTime"
         ),
-        "model_artifact_s3_uri": (
-            None
-            if artifacts["S3ModelArtifacts"] in {None, ""}
-            else _exact_string(
-                artifacts["S3ModelArtifacts"], name="ModelArtifacts.S3ModelArtifacts"
-            )
-        ),
+        "model_artifact_s3_uri": model_artifact_s3_uri,
         "request_sha256": request_receipt["request_sha256"],
         "secondary_status": _exact_string(
             response.get("SecondaryStatus"), name="SecondaryStatus"
