@@ -358,6 +358,8 @@ class RetrievalCvCliTest(unittest.TestCase):
             [
                 "storage-proof",
                 *context,
+                "--phase2-overlay-publication-receipt",
+                "/phase2-overlay.json",
                 "--preflight-receipt",
                 "/preflight.json",
                 "--submission-receipt",
@@ -368,10 +370,10 @@ class RetrievalCvCliTest(unittest.TestCase):
                 "/acquisition/acquisition_receipt.json",
                 "--acquisition-dir",
                 "/acquisition",
-                "--phase2-generated-control-file-size",
-                "4096",
-                "--phase2-generated-control-file-size",
-                "8192",
+                "--control-bundle-receipt",
+                "/phase2-controls/control_bundle_receipt.json",
+                "--control-bundle-dir",
+                "/phase2-controls",
                 "--phase2-output-reserve-bytes",
                 "1073741824",
                 "--safety-reserve-bytes",
@@ -397,6 +399,68 @@ class RetrievalCvCliTest(unittest.TestCase):
                     "5",
                     "--output",
                     "/fold.json",
+                ]
+            )
+
+    def test_phase2_controls_require_distinct_publication_and_static_root(
+        self,
+    ) -> None:
+        evidence = [
+            "--completed-evidence",
+            "/fold.json",
+            "--archive-copy-receipt",
+            "/archives.json",
+            "--static-staging-receipt",
+            "/static.json",
+            "--overlay-publication-receipt",
+            "/phase1-overlay.json",
+            "--phase1-preflight-receipt",
+            "/phase1-preflight.json",
+            "--phase1-submission-receipt",
+            "/phase1-submission.json",
+            "--phase1-terminal-receipt",
+            "/phase1-terminal.json",
+            "--phase1-acquisition-receipt",
+            "/phase1-acquisition.json",
+            "--phase1-acquisition-dir",
+            "/phase1-acquisition",
+        ]
+        arguments = [
+            "fold-processing",
+            "phase2-controls",
+            *evidence,
+            "--phase2-overlay-publication-receipt",
+            "/phase2-overlay.json",
+            "--static-control-dir",
+            "/controls",
+            "--output-dir",
+            "/phase2-controls",
+        ]
+        parsed = cli.parse_args(arguments)
+        self.assertEqual(parsed.overlay_publication_receipt, Path("/phase1-overlay.json"))
+        self.assertEqual(
+            parsed.phase2_overlay_publication_receipt,
+            Path("/phase2-overlay.json"),
+        )
+        self.assertEqual(parsed.static_control_dir, Path("/controls"))
+        with self.assertRaises(SystemExit):
+            cli.parse_args(
+                [
+                    "fold-processing",
+                    "phase2-controls",
+                    *evidence,
+                    "--static-control-dir",
+                    "/controls",
+                    "--output-dir",
+                    "/phase2-controls",
+                ]
+            )
+        with self.assertRaises(SystemExit):
+            cli.parse_args(
+                [
+                    *arguments,
+                    "--evaluation-runtime-identity",
+                    "/stale-runtime.json",
                 ]
             )
 
@@ -747,6 +811,21 @@ class RetrievalCvCliTest(unittest.TestCase):
             "--overlay-publication-receipt",
             "/overlay.json",
         ]
+        phase2_evidence = [
+            *context,
+            "--phase1-preflight-receipt",
+            "/phase1-preflight.json",
+            "--phase1-submission-receipt",
+            "/phase1-submission.json",
+            "--phase1-terminal-receipt",
+            "/phase1-terminal.json",
+            "--phase1-acquisition-receipt",
+            "/phase1-acquisition.json",
+            "--phase1-acquisition-dir",
+            "/phase1-acquisition",
+            "--phase2-overlay-publication-receipt",
+            "/phase2-overlay.json",
+        ]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             fixtures = [
@@ -778,6 +857,30 @@ class RetrievalCvCliTest(unittest.TestCase):
                     "--preflight-receipt",
                     "/preflight.json",
                 ],
+                [
+                    "phase2-stage-controls",
+                    *phase2_evidence,
+                    "--control-bundle-receipt",
+                    "/controls/control_bundle_receipt.json",
+                    "--control-bundle-dir",
+                    "/controls",
+                    "--destination-prefix",
+                    "arr-retrieval-cv/phase2-controls/",
+                ],
+                [
+                    "phase2-submit",
+                    *phase2_evidence,
+                    "--control-bundle-receipt",
+                    "/controls/control_bundle_receipt.json",
+                    "--control-bundle-dir",
+                    "/controls",
+                    "--control-staging-receipt",
+                    "/controls-staging.json",
+                    "--storage-proof",
+                    "/storage-proof.json",
+                    "--preflight-receipt",
+                    "/phase2-preflight.json",
+                ],
             ]
             for arguments in fixtures:
                 output = root / f"{arguments[0]}.output"
@@ -799,12 +902,22 @@ class RetrievalCvCliTest(unittest.TestCase):
                             cli,
                             "_load_phase1_context",
                         ) as load_context,
+                        patch.object(
+                            cli,
+                            "_load_phase2_evidence",
+                        ) as load_phase2_evidence,
+                        patch.object(
+                            cli,
+                            "_load_phase2_context",
+                        ) as load_phase2_context,
                         patch.object(cli.aws, "make_clients") as make_clients,
                     ):
                         with self.assertRaisesRegex(ValueError, "must be disjoint"):
                             cli.main(command)
                     load_completed.assert_not_called()
                     load_context.assert_not_called()
+                    load_phase2_evidence.assert_not_called()
+                    load_phase2_context.assert_not_called()
                     make_clients.assert_not_called()
 
     def test_training_commands_check_absent_output_before_remote_operation(self) -> None:

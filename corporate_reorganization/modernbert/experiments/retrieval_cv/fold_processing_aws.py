@@ -85,6 +85,8 @@ FOLD_OVERLAY_OFFLINE_SMOKE_SHA256 = (
 FOLD_OVERLAY_PUBLICATION_PROTOCOL = (
     "immutable_ecr_fold_evaluation_image_publication_v1"
 )
+G5_12XLARGE_LOCAL_NVME_NOMINAL_BYTES = 3_800_000_000_000
+G5_12XLARGE_LOCAL_FILESYSTEM_MIN_BYTES = 3_500_000_000_000
 
 # These identities are intentionally repeated at the host orchestration
 # boundary.  Importing the GPU evaluator merely to obtain scalar constants
@@ -2684,6 +2686,63 @@ def describe_fold_inventory(
     }
 
 
+def _validate_processing_io_readback(
+    response: Mapping[str, Any],
+    *,
+    request: Mapping[str, Any],
+) -> None:
+    """Accept only SageMaker's explicit false AppManaged readback defaults."""
+
+    actual_inputs = response.get("ProcessingInputs")
+    expected_inputs = request["ProcessingInputs"]
+    if type(actual_inputs) is not list or len(actual_inputs) != len(expected_inputs):
+        raise RuntimeError("DescribeProcessingJob ProcessingInputs differs from request")
+    normalized_inputs: list[dict[str, Any]] = []
+    for record in actual_inputs:
+        if (
+            type(record) is not dict
+            or set(record) != {"AppManaged", "InputName", "S3Input"}
+            or record["AppManaged"] is not False
+        ):
+            raise RuntimeError(
+                "DescribeProcessingJob ProcessingInputs has an unexpected service default"
+            )
+        normalized_inputs.append(
+            {key: copy.deepcopy(value) for key, value in record.items() if key != "AppManaged"}
+        )
+    if normalized_inputs != expected_inputs:
+        raise RuntimeError("DescribeProcessingJob ProcessingInputs differs from request")
+
+    actual_output = response.get("ProcessingOutputConfig")
+    expected_output = request["ProcessingOutputConfig"]
+    if (
+        type(actual_output) is not dict
+        or set(actual_output) != set(expected_output)
+        or type(actual_output.get("Outputs")) is not list
+        or len(actual_output["Outputs"]) != len(expected_output["Outputs"])
+    ):
+        raise RuntimeError("DescribeProcessingJob ProcessingOutputConfig differs from request")
+    normalized_outputs: list[dict[str, Any]] = []
+    for record in actual_output["Outputs"]:
+        if (
+            type(record) is not dict
+            or set(record) != {"AppManaged", "OutputName", "S3Output"}
+            or record["AppManaged"] is not False
+        ):
+            raise RuntimeError(
+                "DescribeProcessingJob ProcessingOutputConfig has an unexpected service default"
+            )
+        normalized_outputs.append(
+            {key: copy.deepcopy(value) for key, value in record.items() if key != "AppManaged"}
+        )
+    normalized_output = {
+        **{key: copy.deepcopy(value) for key, value in actual_output.items() if key != "Outputs"},
+        "Outputs": normalized_outputs,
+    }
+    if normalized_output != expected_output:
+        raise RuntimeError("DescribeProcessingJob ProcessingOutputConfig differs from request")
+
+
 def validate_fold_inventory_terminal_receipt(
     value: object,
     *,
@@ -2787,14 +2846,13 @@ def verify_completed_fold_inventory(
         "AppSpecification",
         "Environment",
         "NetworkConfig",
-        "ProcessingInputs",
-        "ProcessingOutputConfig",
         "ProcessingResources",
         "RoleArn",
         "StoppingCondition",
     ):
         if response.get(field) != request[field]:
             raise RuntimeError(f"DescribeProcessingJob {field} differs from request")
+    _validate_processing_io_readback(response, request=request)
     start = response.get("ProcessingStartTime")
     end = response.get("ProcessingEndTime")
     if (
@@ -3443,8 +3501,10 @@ def validate_fold_storage_proof(value: object) -> dict[str, Any]:
         or proof["outer_fold"] not in range(5)
         or proof["volume_size_gb"] != 100
         or type(proof["filesystem_capacity_bytes"]) is not int
-        or proof["filesystem_capacity_bytes"] < 90 * 1024**3
-        or proof["filesystem_capacity_bytes"] > 100 * 1024**3
+        or proof["filesystem_capacity_bytes"]
+        < G5_12XLARGE_LOCAL_FILESYSTEM_MIN_BYTES
+        or proof["filesystem_capacity_bytes"]
+        > G5_12XLARGE_LOCAL_NVME_NOMINAL_BYTES
         or type(proof["filesystem_available_bytes"]) is not int
         or proof["filesystem_available_bytes"] < 1
         or proof["filesystem_available_bytes"]
@@ -3462,7 +3522,7 @@ def validate_fold_storage_proof(value: object) -> dict[str, Any]:
     expected_components = {
         "static_phase2_inputs_allocated_upper_bound",
         "phase1_evidence_input_allocated_upper_bound",
-        "phase2_generated_control_allocated_upper_bound",
+        "phase2_control_bundle_allocated_upper_bound",
         "controlled_artifact_extraction_allocated_upper_bound",
         "bm25_index_allocated_bytes",
         "phase2_output_reserve_bytes",
@@ -3496,11 +3556,11 @@ def build_fold_storage_proof(
     archive_copy_receipt: Mapping[str, Any],
     static_staging_receipt: Mapping[str, Any],
     overlay_publication_receipt: Mapping[str, Any],
-    phase2_generated_control_file_sizes: Sequence[int],
+    phase2_control_file_sizes: Sequence[int],
     phase2_output_reserve_bytes: int,
     safety_reserve_bytes: int,
 ) -> dict[str, Any]:
-    """Prove the measured Phase-2 high-water bound fits the frozen 100-GB disk."""
+    """Prove fit on the measured fixed NVMe store of the frozen g5.12xlarge."""
 
     acquisition = validate_fold_inventory_acquisition_receipt(
         copy.deepcopy(acquisition_receipt),
@@ -3570,17 +3630,17 @@ def build_fold_storage_proof(
             <= filesystem["free_bytes"]
             <= filesystem["capacity_bytes"]
         )
-        or not 90 * 1024**3
+        or not G5_12XLARGE_LOCAL_FILESYSTEM_MIN_BYTES
         <= filesystem["capacity_bytes"]
-        <= 100 * 1024**3
+        <= G5_12XLARGE_LOCAL_NVME_NOMINAL_BYTES
     ):
         raise ValueError("Phase-1 filesystem capacity/free arithmetic changed")
     if (
-        type(phase2_generated_control_file_sizes) not in {list, tuple}
-        or not phase2_generated_control_file_sizes
-        or any(type(size) is not int or size < 1 for size in phase2_generated_control_file_sizes)
+        type(phase2_control_file_sizes) not in {list, tuple}
+        or not phase2_control_file_sizes
+        or any(type(size) is not int or size < 1 for size in phase2_control_file_sizes)
     ):
-        raise ValueError("Phase-2 generated control sizes must be explicit positive integers")
+        raise ValueError("Phase-2 control-bundle sizes must be explicit positive integers")
     if (
         type(phase2_output_reserve_bytes) is not int
         or phase2_output_reserve_bytes < 1
@@ -3624,9 +3684,9 @@ def build_fold_storage_proof(
         "phase1_evidence_input_allocated_upper_bound": sum(
             _round_allocation(size, fragment) for size in phase1_sizes
         ),
-        "phase2_generated_control_allocated_upper_bound": sum(
+        "phase2_control_bundle_allocated_upper_bound": sum(
             _round_allocation(size, fragment)
-            for size in phase2_generated_control_file_sizes
+            for size in phase2_control_file_sizes
         ),
         "controlled_artifact_extraction_allocated_upper_bound": extracted,
         "bm25_index_allocated_bytes": bm25_bytes,
@@ -3638,7 +3698,7 @@ def build_fold_storage_proof(
     remaining = available - required
     if remaining <= 0:
         raise RuntimeError(
-            "Measured Phase-2 high-water bound does not fit the frozen 100-GB volume: "
+            "Measured Phase-2 high-water bound does not fit the g5.12xlarge filesystem: "
             f"required_additional={required}, available={available}"
         )
     proof = _seal(

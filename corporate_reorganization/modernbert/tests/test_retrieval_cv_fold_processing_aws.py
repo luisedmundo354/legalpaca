@@ -2180,6 +2180,12 @@ class FoldInventoryPreflightTest(unittest.TestCase):
         start = datetime(2026, 7, 13, 18, 0, 0, 123_456, tzinfo=timezone.utc)
         end = datetime(2026, 7, 13, 18, 0, 1, 358_023, tzinfo=timezone.utc)
         request = preflight["request"]
+        processing_inputs = copy.deepcopy(request["ProcessingInputs"])
+        for record in processing_inputs:
+            record["AppManaged"] = False
+        processing_output = copy.deepcopy(request["ProcessingOutputConfig"])
+        for record in processing_output["Outputs"]:
+            record["AppManaged"] = False
         return {
             "ProcessingJobName": preflight["job_name"],
             "ProcessingJobArn": submission["job_arn"],
@@ -2188,14 +2194,14 @@ class FoldInventoryPreflightTest(unittest.TestCase):
             "ExitMessage": "Phase-1 evidence uploaded",
             "ProcessingStartTime": start,
             "ProcessingEndTime": end,
+            "ProcessingInputs": processing_inputs,
+            "ProcessingOutputConfig": processing_output,
             **{
                 field: copy.deepcopy(request[field])
                 for field in (
                     "AppSpecification",
                     "Environment",
                     "NetworkConfig",
-                    "ProcessingInputs",
-                    "ProcessingOutputConfig",
                     "ProcessingResources",
                     "RoleArn",
                     "StoppingCondition",
@@ -2266,6 +2272,34 @@ class FoldInventoryPreflightTest(unittest.TestCase):
             changed["NetworkConfig"]["EnableNetworkIsolation"] = False
             self.clients.sagemaker.describe_processing_job.return_value = changed
             with self.assertRaisesRegex(RuntimeError, "NetworkConfig differs"):
+                fold_processing_aws.verify_completed_fold_inventory(
+                    self.clients,
+                    preflight_receipt=preflight,
+                    submission_receipt=submission,
+                    completed_fold_evidence=self.completed,
+                    archive_copy_receipt=self.archive,
+                    static_staging_receipt=self.static,
+                    overlay_publication_receipt=self.publication,
+                )
+
+            app_managed = self._completed_description(preflight, submission)
+            app_managed["ProcessingInputs"][0]["AppManaged"] = True
+            self.clients.sagemaker.describe_processing_job.return_value = app_managed
+            with self.assertRaisesRegex(RuntimeError, "unexpected service default"):
+                fold_processing_aws.verify_completed_fold_inventory(
+                    self.clients,
+                    preflight_receipt=preflight,
+                    submission_receipt=submission,
+                    completed_fold_evidence=self.completed,
+                    archive_copy_receipt=self.archive,
+                    static_staging_receipt=self.static,
+                    overlay_publication_receipt=self.publication,
+                )
+
+            omitted_default = self._completed_description(preflight, submission)
+            omitted_default["ProcessingOutputConfig"]["Outputs"][0].pop("AppManaged")
+            self.clients.sagemaker.describe_processing_job.return_value = omitted_default
+            with self.assertRaisesRegex(RuntimeError, "unexpected service default"):
                 fold_processing_aws.verify_completed_fold_inventory(
                     self.clients,
                     preflight_receipt=preflight,
@@ -2843,8 +2877,8 @@ class FoldStorageProofTest(unittest.TestCase):
                 },
                 {"name": "e5-pack", "files": [{"size": 4_097}]},
                 {"name": "fixed-base", "files": [{"size": 1}]},
-                # Control is already represented by the explicit generated
-                # Phase-2 control sizes, so its staged source bytes are not
+                # Control is already represented by the explicit Phase-2
+                # control-bundle sizes, so its staged source bytes are not
                 # counted again.
                 {"name": "control", "files": [{"size": 999_999}]},
             ]
@@ -2864,7 +2898,7 @@ class FoldStorageProofTest(unittest.TestCase):
             ],
         }
         fragment = 4_096
-        capacity = 100 * 1_024**3
+        capacity = 3_740_124_893_184
         self.storage = {
             "receipt_sha256": "2" * 64,
             "filesystem_before": {
@@ -2945,7 +2979,7 @@ class FoldStorageProofTest(unittest.TestCase):
             archive_copy_receipt=self.archive,
             static_staging_receipt=self.static,
             overlay_publication_receipt={"fixture": "publication"},
-            phase2_generated_control_file_sizes=control_sizes,
+            phase2_control_file_sizes=control_sizes,
             phase2_output_reserve_bytes=output_reserve,
             safety_reserve_bytes=safety_reserve,
         )
@@ -2959,7 +2993,7 @@ class FoldStorageProofTest(unittest.TestCase):
             {
                 "static_phase2_inputs_allocated_upper_bound": 20_480,
                 "phase1_evidence_input_allocated_upper_bound": 12_288,
-                "phase2_generated_control_allocated_upper_bound": 12_288,
+                "phase2_control_bundle_allocated_upper_bound": 12_288,
                 "controlled_artifact_extraction_allocated_upper_bound": 16_384,
                 "bm25_index_allocated_bytes": 20_480,
                 "phase2_output_reserve_bytes": 4_096,
@@ -3066,11 +3100,11 @@ class FoldStorageProofTest(unittest.TestCase):
                         _reseal(changed)
                     )
 
-    def test_generated_sizes_and_reserves_are_explicit_positive_integers(self) -> None:
+    def test_control_bundle_sizes_and_reserves_are_explicit_positive_integers(self) -> None:
         with self._runtime():
             for sizes in ((), (0,), (True,), (1, -1)):
                 with self.subTest(sizes=sizes):
-                    with self.assertRaisesRegex(ValueError, "control sizes"):
+                    with self.assertRaisesRegex(ValueError, "control-bundle sizes"):
                         self._build(control_sizes=sizes)
             for name, value in (("output", 0), ("output", True), ("safety", -1)):
                 with self.subTest(name=name, value=value):

@@ -411,17 +411,24 @@ no model inputs and produces no rankings, so it is not a fold-0 evaluation and
 cannot satisfy any scientific execution gate. A complete 15-system fold job is
 invalid until all twelve controlled artifacts for that fold exist.
 
-## Phase-1 AWS fold inventory
+## AWS fold inventory and evaluation
 
 The `fold-processing` CLI is the one-shot host control plane for the fold
-inventory and storage gate. Phase 1 does not evaluate rankings. It mounts the
-twelve exact, versioned controlled-model archives plus the corrected dataset
-and frozen controls on one network-isolated `ml.g5.12xlarge` Processing job. It
-streams and hashes each archive, validates its safe extraction footprint,
-builds BM25 twice to measure its allocated disk blocks, and emits only
-`archive_inventory.json`, `bm25_storage.json`, and `artifact_manifest.json`.
-`phase1-acquire` downloads those three compact evidence files, never a model
-archive or trained model.
+inventory, storage, and evaluation gates. Phase 1 does not evaluate rankings.
+It mounts the twelve exact, versioned controlled-model archives plus the
+corrected dataset and frozen controls on one network-isolated
+`ml.g5.12xlarge` Processing job. It streams and hashes each archive, validates
+its safe extraction footprint, builds BM25 twice to measure its allocated disk
+blocks, and emits only `archive_inventory.json`, `bm25_storage.json`, and
+`artifact_manifest.json`. `phase1-acquire` downloads those three compact
+evidence files, never a model archive or trained model.
+
+Phase 2 reuses those S3-resident archives directly. It generates an exact
+six-file control bundle, proves the complete extraction/evaluation high-water
+bound against the filesystem measured by Phase 1, and runs all twelve trained
+systems plus the three frozen baselines in one network-isolated Processing
+job. Only the six compact ranking/result/evidence files are acquired locally;
+trained weights remain in AWS.
 
 Use the command below for the exact arguments. The modes form this strict
 sequence:
@@ -440,17 +447,34 @@ sequence:
 5. `phase1-status` is read-only. `phase1-verify` accepts only an exact clean
    `Completed` result and seals its terminal receipt.
 6. `phase1-acquire` writes one new local acquisition directory containing only
-   compact evidence. `storage-proof` combines its measured filesystem values
-   with explicit Phase-2 generated-control sizes, output reserve, and safety
-   reserve, and fails unless the exact high-water bound fits 100 GB.
+   compact evidence.
+7. `phase2-controls` copies the four frozen controls and generates the exact
+   evaluation plan and local bindings. It explicitly binds the original
+   Phase-1 image receipt and the distinct corrected Phase-2 image receipt.
+8. `phase2-stage-controls` writes the six controls once under a new versioned
+   S3 prefix. `storage-proof` accounts for all six files, every controlled
+   artifact extraction, the measured BM25 allocation, output reserve, and
+   safety reserve. It fails unless the exact high-water bound fits the fixed
+   3.8-TB NVMe filesystem measured on `g5.12xlarge`; the submitted request
+   still retains and verifies its explicit 100-GB `VolumeSizeInGB` value.
+9. `phase2-preflight` revalidates all local and remote evidence, the corrected
+   image by ECR digest, quota, instance offering, unused job name, and unused
+   output prefix. `phase2-submit` persists a durable intent before exactly one
+   `CreateProcessingJob` call.
+10. `phase2-status` is read-only. `phase2-verify` accepts only an exact clean
+    service readback, including SageMaker's explicit `AppManaged: false`
+    defaults, and seals terminal timing evidence. `phase2-acquire` streams and
+    validates exactly six compact output objects into one absent local tree.
 
 Every mode requires absolute local paths and absent outputs; staging, copy, and
-submission also require an absent state directory. S3 prefixes and job names
-are one-use identities. There is no overwrite, resume, retry, cleanup,
+submission also require an absent state directory. The original Phase-1 image
+receipt and corrected Phase-2 image receipt are separate required arguments
+and cannot be substituted for each other. S3 prefixes and job names are
+one-use identities. There is no overwrite, resume, retry, cleanup,
 reconciliation, adoption, alternate instance, or inferred default. All AWS
 clients derive their region from the recursively validated completed-fold
 training plan. Receipt inputs must be exact deterministic JSON: either the
-repository's indented canonical form or the compact canonical form used by the
+repository's indented canonical form or the compact canonical form used by an
 overlay publication receipt. Duplicate keys and every other byte layout are
 rejected.
 
