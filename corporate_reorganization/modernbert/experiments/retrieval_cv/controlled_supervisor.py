@@ -44,6 +44,7 @@ CONTROLLED_SUPERVISOR_COMPLETION_PROTOCOL = (
 CONTROLLED_SUPERVISOR_SNAPSHOT_PROTOCOL = (
     "retrieval_cv_controlled_supervisor_snapshot_v1"
 )
+COMPLETED_FOLD_EVIDENCE_PROTOCOL = "retrieval_cv_completed_fold_evidence_v1"
 CONTROLLED_MAX_ACTIVE = 4
 
 _STATE_FILE = "supervisor.json"
@@ -104,6 +105,34 @@ _COMPLETION_KEYS = {
     "terminal_receipt_sha256_by_run",
     "succeeded",
     "receipt_sha256",
+}
+_COMPLETED_FOLD_EVIDENCE_KEYS = {
+    "schema_version",
+    "protocol",
+    "outer_fold",
+    "attempt_id",
+    "state_manifest_sha256",
+    "training_plan",
+    "training_plan_sha256",
+    "training_staging_receipt",
+    "training_staging_receipt_sha256",
+    "source_bundle",
+    "systems",
+    "receipt_sha256",
+}
+_COMPLETED_FOLD_SYSTEM_KEYS = {
+    "ordinal",
+    "queue_index",
+    "cell",
+    "run_id",
+    "job_name",
+    "preflight_receipt",
+    "preflight_receipt_sha256",
+    "submission_receipt",
+    "submission_receipt_sha256",
+    "terminal_receipt",
+    "terminal_receipt_sha256",
+    "request_receipt_sha256",
 }
 
 
@@ -903,6 +932,288 @@ def _load_run_state(
         "root_identity": root_identity,
         "observations_identity": observations_identity,
     }
+
+
+def _completed_fold_order(outer_fold: int) -> list[dict[str, Any]]:
+    if type(outer_fold) is not int or outer_fold not in strict_config.CONTROLLED_FOLDS:
+        raise ValueError("outer_fold must be one frozen controlled fold")
+    cells = [
+        {
+            "outer_fold": outer_fold,
+            "query_view": query_view,
+            "sampler": sampler,
+            "experiment_seed": seed,
+        }
+        for query_view in strict_config.CONTROLLED_QUERY_VIEWS
+        for sampler in strict_config.CONTROLLED_SAMPLERS
+        for seed in strict_config.CONTROLLED_SEEDS
+    ]
+    return sorted(
+        cells,
+        key=lambda cell: (
+            f"{cell['query_view']}_{cell['sampler']}_"
+            f"seed{cell['experiment_seed']}"
+        ),
+    )
+
+
+def _completed_fold_source_bundle(plan: Mapping[str, Any]) -> dict[str, Any]:
+    source = plan["sources"]
+    digest = source["source_bundle_sha256"]
+    return {
+        "name": f"source-{digest}.tar.gz",
+        "size": source["source_bundle_size"],
+        "sha256": digest,
+        "inventory_sha256": source["source_inventory_sha256"],
+        "commit_epoch": source["commit_epoch"],
+    }
+
+
+def _completed_fold_payload(
+    *,
+    supervisor: Mapping[str, Any],
+    outer_fold: int,
+    states: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    plan = supervisor["training_plan"]
+    staged = supervisor["staging_receipt"]
+    expected_cells = _completed_fold_order(outer_fold)
+    by_cell = {
+        (
+            state["entry"]["outer_fold"],
+            state["entry"]["query_view"],
+            state["entry"]["sampler"],
+            state["entry"]["experiment_seed"],
+        ): state
+        for state in states
+    }
+    systems: list[dict[str, Any]] = []
+    for ordinal, cell in enumerate(expected_cells):
+        key = (
+            cell["outer_fold"],
+            cell["query_view"],
+            cell["sampler"],
+            cell["experiment_seed"],
+        )
+        state = by_cell.get(key)
+        if state is None or state["phase"] != "completed":
+            run_id = None if state is None else state["entry"]["run_id"]
+            raise RuntimeError(
+                "Completed-fold evidence requires all twelve successful terminals: "
+                f"missing_or_incomplete={run_id or key!r}"
+            )
+        entry = state["entry"]
+        preflight = state["preflight"]
+        submission = state["submission"]
+        terminal = state["terminal"]
+        systems.append(
+            {
+                "ordinal": ordinal,
+                "queue_index": entry["queue_index"],
+                "cell": copy.deepcopy(cell),
+                "run_id": entry["run_id"],
+                "job_name": entry["job_name"],
+                "preflight_receipt": copy.deepcopy(preflight),
+                "preflight_receipt_sha256": _document_sha256(preflight),
+                "submission_receipt": copy.deepcopy(submission),
+                "submission_receipt_sha256": _document_sha256(submission),
+                "terminal_receipt": copy.deepcopy(terminal),
+                "terminal_receipt_sha256": _document_sha256(terminal),
+                "request_receipt_sha256": _document_sha256(
+                    preflight["request_receipt"]
+                ),
+            }
+        )
+    return {
+        "schema_version": 1,
+        "protocol": COMPLETED_FOLD_EVIDENCE_PROTOCOL,
+        "outer_fold": outer_fold,
+        "attempt_id": plan["attempt"]["attempt_id"],
+        "state_manifest_sha256": _document_sha256(supervisor),
+        "training_plan": copy.deepcopy(plan),
+        "training_plan_sha256": _document_sha256(plan),
+        "training_staging_receipt": copy.deepcopy(staged),
+        "training_staging_receipt_sha256": _document_sha256(staged),
+        "source_bundle": _completed_fold_source_bundle(plan),
+        "systems": systems,
+    }
+
+
+def validate_completed_fold_evidence(value: object) -> dict[str, Any]:
+    """Contextually validate one sealed twelve-system completed-fold view."""
+
+    evidence = _exact_object(
+        value,
+        _COMPLETED_FOLD_EVIDENCE_KEYS,
+        name="completed-fold evidence",
+    )
+    _require_plain_json(evidence, name="completed-fold evidence")
+    if (
+        type(evidence["schema_version"]) is not int
+        or evidence["schema_version"] != 1
+        or evidence["protocol"] != COMPLETED_FOLD_EVIDENCE_PROTOCOL
+    ):
+        raise ValueError("Completed-fold evidence protocol identity changed")
+    outer_fold = evidence["outer_fold"]
+    expected_cells = _completed_fold_order(outer_fold)
+    plan = manifest.validate_dry_manifest(copy.deepcopy(evidence["training_plan"]))
+    staged = training_aws.validate_training_staging_receipt(
+        copy.deepcopy(evidence["training_staging_receipt"]),
+        training_plan=plan,
+    )
+    if (
+        evidence["attempt_id"] != plan["attempt"]["attempt_id"]
+        or evidence["training_plan_sha256"] != _document_sha256(plan)
+        or evidence["training_staging_receipt_sha256"] != _document_sha256(staged)
+        or evidence["source_bundle"] != _completed_fold_source_bundle(plan)
+    ):
+        raise ValueError("Completed-fold plan/staging/source binding changed")
+    _exact_sha256(
+        evidence["state_manifest_sha256"],
+        name="completed-fold.state_manifest_sha256",
+    )
+    controlled_by_cell = {
+        (
+            run["cell"]["outer_fold"],
+            run["cell"]["query_view"],
+            run["cell"]["sampler"],
+            run["cell"]["experiment_seed"],
+        ): run
+        for run in plan["controlled_runs"]
+    }
+    schedule_by_cell = {
+        (
+            entry["outer_fold"],
+            entry["query_view"],
+            entry["sampler"],
+            entry["experiment_seed"],
+        ): entry
+        for entry in _controlled_schedule(plan)
+    }
+    systems = evidence["systems"]
+    if type(systems) is not list or len(systems) != 12:
+        raise ValueError("Completed-fold evidence requires exactly twelve systems")
+    normalized_systems: list[dict[str, Any]] = []
+    queue_indexes: set[int] = set()
+    for ordinal, (raw, expected_cell) in enumerate(zip(systems, expected_cells)):
+        system = _exact_object(
+            raw,
+            _COMPLETED_FOLD_SYSTEM_KEYS,
+            name=f"completed-fold.systems[{ordinal}]",
+        )
+        cell = system["cell"]
+        if type(cell) is not dict or cell != expected_cell:
+            raise ValueError("Completed-fold system cell order changed")
+        key = (
+            cell["outer_fold"],
+            cell["query_view"],
+            cell["sampler"],
+            cell["experiment_seed"],
+        )
+        run = controlled_by_cell.get(key)
+        schedule_entry = schedule_by_cell.get(key)
+        if run is None or schedule_entry is None:
+            raise ValueError("Completed-fold cell is absent from the training plan")
+        queue_index = system["queue_index"]
+        if (
+            type(system["ordinal"]) is not int
+            or system["ordinal"] != ordinal
+            or type(queue_index) is not int
+            or queue_index != schedule_entry["queue_index"]
+            or queue_index in queue_indexes
+            or system["run_id"] != run["run_id"]
+            or system["job_name"] != run["job_name"]
+        ):
+            raise ValueError("Completed-fold system launch identity changed")
+        queue_indexes.add(queue_index)
+        preflight = training_launch.validate_training_preflight_receipt(
+            copy.deepcopy(system["preflight_receipt"]),
+            training_plan=plan,
+            staging_receipt=staged,
+        )
+        submission = training_launch.validate_training_submission_receipt(
+            copy.deepcopy(system["submission_receipt"]),
+            training_plan=plan,
+            staging_receipt=staged,
+            preflight_receipt=preflight,
+        )
+        terminal = training_launch.validate_training_terminal_receipt(
+            copy.deepcopy(system["terminal_receipt"]),
+            training_plan=plan,
+            staging_receipt=staged,
+            preflight_receipt=preflight,
+            submission_receipt=submission,
+        )
+        if (
+            preflight["run_id"] != run["run_id"]
+            or submission["run_id"] != run["run_id"]
+            or terminal["run_id"] != run["run_id"]
+            or terminal["terminal_status"] != "Completed"
+            or terminal["succeeded"] is not True
+            or system["preflight_receipt_sha256"] != _document_sha256(preflight)
+            or system["submission_receipt_sha256"] != _document_sha256(submission)
+            or system["terminal_receipt_sha256"] != _document_sha256(terminal)
+            or system["request_receipt_sha256"]
+            != _document_sha256(preflight["request_receipt"])
+        ):
+            raise ValueError("Completed-fold receipt chain changed")
+        normalized_system = copy.deepcopy(system)
+        normalized_system["preflight_receipt"] = preflight
+        normalized_system["submission_receipt"] = submission
+        normalized_system["terminal_receipt"] = terminal
+        normalized_systems.append(normalized_system)
+    _validate_self_hash(evidence, name="completed-fold evidence")
+    normalized = copy.deepcopy(evidence)
+    normalized["training_plan"] = plan
+    normalized["training_staging_receipt"] = staged
+    normalized["systems"] = normalized_systems
+    return normalized
+
+
+def load_completed_fold_evidence(
+    *,
+    state_dir: Path,
+    outer_fold: int,
+) -> dict[str, Any]:
+    """Load one fold only after all twelve local terminal chains are sealed."""
+
+    _completed_fold_order(outer_fold)
+    state_dir = _real_directory(state_dir, name="supervisor state directory")
+    supervisor, manifest_file_sha256 = _load_supervisor_manifest(
+        state_dir,
+        deep_gate=True,
+    )
+    identities = _capture_layout_identities(state_dir, supervisor)
+    selected = [
+        entry for entry in supervisor["schedule"] if entry["outer_fold"] == outer_fold
+    ]
+    if len(selected) != 12:
+        raise ValueError("Supervisor schedule does not contain twelve fold systems")
+    states = [
+        _load_run_state(
+            state_dir=state_dir,
+            supervisor=supervisor,
+            entry=entry,
+            root_identity=identities["per_run"][entry["run_id"]]["root"],
+            observations_identity=identities["per_run"][entry["run_id"]][
+                "observations"
+            ],
+        )
+        for entry in selected
+    ]
+    payload = _completed_fold_payload(
+        supervisor=supervisor,
+        outer_fold=outer_fold,
+        states=states,
+    )
+    reloaded, reloaded_sha256 = _load_supervisor_manifest(state_dir, deep_gate=False)
+    if (
+        reloaded_sha256 != manifest_file_sha256
+        or aws.canonical_json_bytes(reloaded)
+        != aws.canonical_json_bytes(supervisor)
+    ):
+        raise RuntimeError("Supervisor manifest changed during completed-fold loading")
+    return validate_completed_fold_evidence(_seal(payload))
 
 
 def _completion_receipt(

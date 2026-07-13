@@ -411,6 +411,49 @@ no model inputs and produces no rankings, so it is not a fold-0 evaluation and
 cannot satisfy any scientific execution gate. A complete 15-system fold job is
 invalid until all twelve controlled artifacts for that fold exist.
 
+## Phase-1 AWS fold inventory
+
+The `fold-processing` CLI is the one-shot host control plane for the fold
+inventory and storage gate. Phase 1 does not evaluate rankings. It mounts the
+twelve exact, versioned controlled-model archives plus the corrected dataset
+and frozen controls on one network-isolated `ml.g5.12xlarge` Processing job. It
+streams and hashes each archive, validates its safe extraction footprint,
+builds BM25 twice to measure its allocated disk blocks, and emits only
+`archive_inventory.json`, `bm25_storage.json`, and `artifact_manifest.json`.
+`phase1-acquire` downloads those three compact evidence files, never a model
+archive or trained model.
+
+Use the command below for the exact arguments. The modes form this strict
+sequence:
+
+    python -m corporate_reorganization.modernbert.experiments.retrieval_cv.cli fold-processing --help
+
+1. `completed-evidence` reads one supervisor state tree and seals a fold only
+   after all twelve terminal chains for `--outer-fold` are successful.
+2. `stage-static` stages the exact E5 snapshot, E5 focus pack, fixed-base
+   artifact, and four frozen control files under a new S3 prefix.
+3. `copy-archives` copies the twelve exact source VersionIds under a different
+   new S3 prefix and publishes the archive input manifest last.
+4. `phase1-preflight` deeply verifies those inputs and the immutable overlay
+   image, then freezes the exact Processing request. `phase1-submit` writes a
+   durable create intent and makes exactly one `CreateProcessingJob` call.
+5. `phase1-status` is read-only. `phase1-verify` accepts only an exact clean
+   `Completed` result and seals its terminal receipt.
+6. `phase1-acquire` writes one new local acquisition directory containing only
+   compact evidence. `storage-proof` combines its measured filesystem values
+   with explicit Phase-2 generated-control sizes, output reserve, and safety
+   reserve, and fails unless the exact high-water bound fits 100 GB.
+
+Every mode requires absolute local paths and absent outputs; staging, copy, and
+submission also require an absent state directory. S3 prefixes and job names
+are one-use identities. There is no overwrite, resume, retry, cleanup,
+reconciliation, adoption, alternate instance, or inferred default. All AWS
+clients derive their region from the recursively validated completed-fold
+training plan. Receipt inputs must be exact deterministic JSON: either the
+repository's indented canonical form or the compact canonical form used by the
+overlay publication receipt. Duplicate keys and every other byte layout are
+rejected.
+
 AWS-local values live only in ignored `aws.local.json`; credentials and profile
 names are forbidden. Run the CLI with the pinned `legalpacaenv`, because
 source bundling requires Python 3.11.13 with compile/runtime zlib 1.2.13 and

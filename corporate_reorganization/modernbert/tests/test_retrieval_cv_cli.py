@@ -254,6 +254,152 @@ class RetrievalCvCliTest(unittest.TestCase):
         self.assertEqual(first_attempt.attempt_id, "a1")
         self.assertIsNone(first_attempt.parent_manifest)
 
+    def test_fold_processing_modes_parse_explicit_contract(self) -> None:
+        context = [
+            "--completed-evidence",
+            "/fold.json",
+            "--archive-copy-receipt",
+            "/archives.json",
+            "--static-staging-receipt",
+            "/static.json",
+            "--overlay-publication-receipt",
+            "/overlay.json",
+        ]
+        fixtures = [
+            [
+                "completed-evidence",
+                "--supervisor-state-dir",
+                "/supervisor",
+                "--outer-fold",
+                "0",
+                "--output",
+                "/fold.json",
+            ],
+            [
+                "stage-static",
+                "--completed-evidence",
+                "/fold.json",
+                "--e5-snapshot-dir",
+                "/e5",
+                "--e5-snapshot-manifest",
+                "/controls/e5_snapshot.json",
+                "--e5-pack-dir",
+                "/e5-pack",
+                "--fixed-base-dir",
+                "/fixed",
+                "--destination-prefix",
+                "arr/static/f0/",
+                "--state-dir",
+                "/state/static",
+                "--receipt-output",
+                "/static.json",
+            ],
+            [
+                "copy-archives",
+                "--completed-evidence",
+                "/fold.json",
+                "--destination-prefix",
+                "arr/archives/f0/",
+                "--state-dir",
+                "/state/archives",
+                "--receipt-output",
+                "/archives.json",
+            ],
+            [
+                "phase1-preflight",
+                *context,
+                "--job-name",
+                "arr-ret-cv1-f0-inventory-a3",
+                "--output-prefix",
+                "arr/inventory/f0/",
+                "--receipt-output",
+                "/preflight.json",
+            ],
+            [
+                "phase1-submit",
+                *context,
+                "--preflight-receipt",
+                "/preflight.json",
+                "--state-dir",
+                "/state/submission",
+                "--receipt-output",
+                "/submission.json",
+            ],
+            [
+                "phase1-status",
+                *context,
+                "--preflight-receipt",
+                "/preflight.json",
+                "--output",
+                "/status.json",
+            ],
+            [
+                "phase1-verify",
+                *context,
+                "--preflight-receipt",
+                "/preflight.json",
+                "--submission-receipt",
+                "/submission.json",
+                "--receipt-output",
+                "/terminal.json",
+            ],
+            [
+                "phase1-acquire",
+                *context,
+                "--preflight-receipt",
+                "/preflight.json",
+                "--submission-receipt",
+                "/submission.json",
+                "--terminal-receipt",
+                "/terminal.json",
+                "--output-dir",
+                "/acquisition",
+            ],
+            [
+                "storage-proof",
+                *context,
+                "--preflight-receipt",
+                "/preflight.json",
+                "--submission-receipt",
+                "/submission.json",
+                "--terminal-receipt",
+                "/terminal.json",
+                "--acquisition-receipt",
+                "/acquisition/acquisition_receipt.json",
+                "--acquisition-dir",
+                "/acquisition",
+                "--phase2-generated-control-file-size",
+                "4096",
+                "--phase2-generated-control-file-size",
+                "8192",
+                "--phase2-output-reserve-bytes",
+                "1073741824",
+                "--safety-reserve-bytes",
+                "2147483648",
+                "--output",
+                "/storage-proof.json",
+            ],
+        ]
+        for arguments in fixtures:
+            with self.subTest(mode=arguments[0]):
+                parsed = cli.parse_args(["fold-processing", *arguments])
+                self.assertEqual(parsed.command, "fold-processing")
+                self.assertEqual(parsed.fold_mode, arguments[0])
+
+        with self.assertRaises(SystemExit):
+            cli.parse_args(
+                [
+                    "fold-processing",
+                    "completed-evidence",
+                    "--supervisor-state-dir",
+                    "/supervisor",
+                    "--outer-fold",
+                    "5",
+                    "--output",
+                    "/fold.json",
+                ]
+            )
+
     def test_attempt_parent_is_explicit_and_immediately_previous(self) -> None:
         self.assertIsNone(
             cli._parent_manifest_sha256(
@@ -410,6 +556,256 @@ class RetrievalCvCliTest(unittest.TestCase):
             self.assertFalse((output.parent / ".receipt.json.incomplete").exists())
             with self.assertRaises(FileExistsError):
                 cli._publish_json(output, value)
+
+    def test_receipt_loader_accepts_only_the_two_exact_canonical_encodings(
+        self,
+    ) -> None:
+        value = {"nested": {"ready": True}, "schema_version": 1}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            pretty = root / "pretty.json"
+            compact = root / "compact.json"
+            duplicate = root / "duplicate.json"
+            noncanonical = root / "noncanonical.json"
+            pretty.write_bytes(config.canonical_json_bytes(value))
+            compact.write_bytes(cli.aws.canonical_json_bytes(value))
+            duplicate.write_bytes(b'{"schema_version":1,"schema_version":2}\n')
+            noncanonical.write_bytes(b'{"schema_version": 1}\n')
+
+            self.assertEqual(cli._load_receipt(pretty), value)
+            self.assertEqual(cli._load_receipt(compact), value)
+            with self.assertRaisesRegex(ValueError, "Duplicate JSON object key"):
+                cli._load_receipt(duplicate)
+            with self.assertRaisesRegex(ValueError, "neither repository-canonical"):
+                cli._load_receipt(noncanonical)
+
+    def test_fold_clients_use_only_completed_evidence_plan_region(self) -> None:
+        completed = {
+            "training_plan": {
+                "infrastructure": {"region": "us-east-1"},
+            }
+        }
+        clients = Mock()
+        with patch.object(cli.aws, "make_clients", return_value=clients) as make:
+            self.assertIs(cli._clients_for_completed_fold(completed), clients)
+        make.assert_called_once_with(region="us-east-1")
+
+    def test_phase1_status_validates_context_and_uses_preflight_job_name(
+        self,
+    ) -> None:
+        completed = {
+            "training_plan": {
+                "infrastructure": {"region": "us-east-1"},
+            }
+        }
+        archive = {"protocol": "archives"}
+        static = {"protocol": "static"}
+        publication = {"protocol": "overlay"}
+        preflight = {"job_name": "arr-ret-cv1-f0-inventory-a3"}
+        clients = Mock()
+        status = {"schema_version": 1, "status": "InProgress"}
+        arguments = [
+            "fold-processing",
+            "phase1-status",
+            "--completed-evidence",
+            "/fold.json",
+            "--archive-copy-receipt",
+            "/archives.json",
+            "--static-staging-receipt",
+            "/static.json",
+            "--overlay-publication-receipt",
+            "/overlay.json",
+            "--preflight-receipt",
+            "/preflight.json",
+            "--output",
+            "/status.json",
+        ]
+        with (
+            patch.object(cli, "_require_absent_output") as absent,
+            patch.object(
+                cli,
+                "_load_phase1_context",
+                return_value=(completed, archive, static, publication),
+            ),
+            patch.object(cli, "_load_receipt", return_value={"raw": "preflight"}),
+            patch.object(
+                cli.fold_processing_aws,
+                "validate_fold_inventory_preflight_receipt",
+                return_value=preflight,
+            ) as validate,
+            patch.object(
+                cli,
+                "_clients_for_completed_fold",
+                return_value=clients,
+            ) as make_clients,
+            patch.object(
+                cli.fold_processing_aws,
+                "describe_fold_inventory",
+                return_value=status,
+            ) as describe,
+            patch.object(cli, "_publish_json") as publish,
+        ):
+            self.assertEqual(cli.main(arguments), 0)
+        absent.assert_called_once_with(Path("/status.json"))
+        validate.assert_called_once_with(
+            {"raw": "preflight"},
+            completed_fold_evidence=completed,
+            archive_copy_receipt=archive,
+            static_staging_receipt=static,
+            overlay_publication_receipt=publication,
+        )
+        make_clients.assert_called_once_with(completed)
+        describe.assert_called_once_with(
+            clients.sagemaker,
+            job_name="arr-ret-cv1-f0-inventory-a3",
+        )
+        publish.assert_called_once_with(Path("/status.json"), status)
+
+    def test_existing_fold_output_stops_before_evidence_or_aws_access(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "static.json"
+            output.write_bytes(b"occupied")
+            with (
+                patch.object(cli, "_load_completed_fold_evidence") as load,
+                patch.object(cli.aws, "make_clients") as make_clients,
+            ):
+                with self.assertRaisesRegex(FileExistsError, "overwrite"):
+                    cli.main(
+                        [
+                            "fold-processing",
+                            "stage-static",
+                            "--completed-evidence",
+                            "/fold.json",
+                            "--e5-snapshot-dir",
+                            "/e5",
+                            "--e5-snapshot-manifest",
+                            "/controls/e5_snapshot.json",
+                            "--e5-pack-dir",
+                            "/e5-pack",
+                            "--fixed-base-dir",
+                            "/fixed",
+                            "--destination-prefix",
+                            "arr/static/f0/",
+                            "--state-dir",
+                            str(root / "state"),
+                            "--receipt-output",
+                            str(output),
+                        ]
+                    )
+            load.assert_not_called()
+            make_clients.assert_not_called()
+
+    def test_fold_state_and_receipt_paths_must_be_resolved_disjoint(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            real = root / "real"
+            real.mkdir()
+            alias = root / "alias"
+            alias.symlink_to(real, target_is_directory=True)
+            invalid = [
+                ("equal", root / "same", root / "same"),
+                ("first ancestor", root / "parent", root / "parent/child"),
+                ("second ancestor", root / "parent/child", root / "parent"),
+                ("resolved equal", real / "same", alias / "same"),
+                (
+                    "resolved first ancestor",
+                    real / "parent",
+                    alias / "parent/child",
+                ),
+                (
+                    "resolved second ancestor",
+                    real / "parent/child",
+                    alias / "parent",
+                ),
+            ]
+            for label, first, second in invalid:
+                with self.subTest(case=label):
+                    with self.assertRaisesRegex(ValueError, "must be disjoint"):
+                        cli._require_disjoint_paths(
+                            first,
+                            second,
+                            name="Fold outputs",
+                        )
+
+            cli._require_disjoint_paths(
+                real / "left",
+                alias / "right",
+                name="Fold outputs",
+            )
+
+    def test_each_stateful_fold_dispatch_rejects_equal_outputs_before_load(
+        self,
+    ) -> None:
+        context = [
+            "--completed-evidence",
+            "/fold.json",
+            "--archive-copy-receipt",
+            "/archives.json",
+            "--static-staging-receipt",
+            "/static.json",
+            "--overlay-publication-receipt",
+            "/overlay.json",
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixtures = [
+                [
+                    "stage-static",
+                    "--completed-evidence",
+                    "/fold.json",
+                    "--e5-snapshot-dir",
+                    "/e5",
+                    "--e5-snapshot-manifest",
+                    "/controls/e5_snapshot.json",
+                    "--e5-pack-dir",
+                    "/e5-pack",
+                    "--fixed-base-dir",
+                    "/fixed",
+                    "--destination-prefix",
+                    "arr/static/f0/",
+                ],
+                [
+                    "copy-archives",
+                    "--completed-evidence",
+                    "/fold.json",
+                    "--destination-prefix",
+                    "arr/archives/f0/",
+                ],
+                [
+                    "phase1-submit",
+                    *context,
+                    "--preflight-receipt",
+                    "/preflight.json",
+                ],
+            ]
+            for arguments in fixtures:
+                output = root / f"{arguments[0]}.output"
+                command = [
+                    "fold-processing",
+                    *arguments,
+                    "--state-dir",
+                    str(output),
+                    "--receipt-output",
+                    str(output),
+                ]
+                with self.subTest(mode=arguments[0]):
+                    with (
+                        patch.object(
+                            cli,
+                            "_load_completed_fold_evidence",
+                        ) as load_completed,
+                        patch.object(
+                            cli,
+                            "_load_phase1_context",
+                        ) as load_context,
+                        patch.object(cli.aws, "make_clients") as make_clients,
+                    ):
+                        with self.assertRaisesRegex(ValueError, "must be disjoint"):
+                            cli.main(command)
+                    load_completed.assert_not_called()
+                    load_context.assert_not_called()
+                    make_clients.assert_not_called()
 
     def test_training_commands_check_absent_output_before_remote_operation(self) -> None:
         plan = {"infrastructure": {"region": "us-east-1"}}

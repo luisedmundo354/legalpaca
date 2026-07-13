@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 from typing import Any, Sequence
@@ -11,7 +12,9 @@ from . import (
     aggregate,
     aws,
     config,
+    controlled_supervisor,
     determinism_gate,
+    fold_processing_aws,
     folds,
     manifest,
     training_artifacts,
@@ -36,6 +39,22 @@ def _require_absent_output(path: Path) -> None:
     incomplete = path.with_name(f".{path.name}.incomplete")
     if incomplete.exists() or incomplete.is_symlink():
         raise FileExistsError(f"Refusing stale incomplete output: {incomplete}")
+
+
+def _require_disjoint_paths(
+    first: Path,
+    second: Path,
+    *,
+    name: str,
+) -> None:
+    first_resolved = first.resolve(strict=False)
+    second_resolved = second.resolve(strict=False)
+    if (
+        first_resolved == second_resolved
+        or first_resolved in second_resolved.parents
+        or second_resolved in first_resolved.parents
+    ):
+        raise ValueError(f"{name} must be disjoint")
 
 
 def _publish_json(path: Path, value: object) -> None:
@@ -204,6 +223,109 @@ def _parser() -> argparse.ArgumentParser:
         "--acquisition-receipt-b", type=Path, required=True
     )
     verify_determinism.add_argument("--output", type=Path, required=True)
+
+    fold_processing = commands.add_parser("fold-processing", allow_abbrev=False)
+    fold_modes = fold_processing.add_subparsers(dest="fold_mode", required=True)
+
+    completed_evidence = fold_modes.add_parser("completed-evidence", allow_abbrev=False)
+    completed_evidence.add_argument("--supervisor-state-dir", type=Path, required=True)
+    completed_evidence.add_argument(
+        "--outer-fold", type=int, choices=range(5), required=True
+    )
+    completed_evidence.add_argument("--output", type=Path, required=True)
+
+    stage_static = fold_modes.add_parser("stage-static", allow_abbrev=False)
+    stage_static.add_argument("--completed-evidence", type=Path, required=True)
+    stage_static.add_argument("--e5-snapshot-dir", type=Path, required=True)
+    stage_static.add_argument("--e5-snapshot-manifest", type=Path, required=True)
+    stage_static.add_argument("--e5-pack-dir", type=Path, required=True)
+    stage_static.add_argument("--fixed-base-dir", type=Path, required=True)
+    stage_static.add_argument("--destination-prefix", required=True)
+    stage_static.add_argument("--state-dir", type=Path, required=True)
+    stage_static.add_argument("--receipt-output", type=Path, required=True)
+
+    copy_archives = fold_modes.add_parser("copy-archives", allow_abbrev=False)
+    copy_archives.add_argument("--completed-evidence", type=Path, required=True)
+    copy_archives.add_argument("--destination-prefix", required=True)
+    copy_archives.add_argument("--state-dir", type=Path, required=True)
+    copy_archives.add_argument("--receipt-output", type=Path, required=True)
+
+    phase1_preflight = fold_modes.add_parser("phase1-preflight", allow_abbrev=False)
+    phase1_preflight.add_argument("--completed-evidence", type=Path, required=True)
+    phase1_preflight.add_argument("--archive-copy-receipt", type=Path, required=True)
+    phase1_preflight.add_argument("--static-staging-receipt", type=Path, required=True)
+    phase1_preflight.add_argument(
+        "--overlay-publication-receipt", type=Path, required=True
+    )
+    phase1_preflight.add_argument("--job-name", required=True)
+    phase1_preflight.add_argument("--output-prefix", required=True)
+    phase1_preflight.add_argument("--receipt-output", type=Path, required=True)
+
+    phase1_submit = fold_modes.add_parser("phase1-submit", allow_abbrev=False)
+    phase1_submit.add_argument("--completed-evidence", type=Path, required=True)
+    phase1_submit.add_argument("--archive-copy-receipt", type=Path, required=True)
+    phase1_submit.add_argument("--static-staging-receipt", type=Path, required=True)
+    phase1_submit.add_argument(
+        "--overlay-publication-receipt", type=Path, required=True
+    )
+    phase1_submit.add_argument("--preflight-receipt", type=Path, required=True)
+    phase1_submit.add_argument("--state-dir", type=Path, required=True)
+    phase1_submit.add_argument("--receipt-output", type=Path, required=True)
+
+    phase1_status = fold_modes.add_parser("phase1-status", allow_abbrev=False)
+    phase1_status.add_argument("--completed-evidence", type=Path, required=True)
+    phase1_status.add_argument("--archive-copy-receipt", type=Path, required=True)
+    phase1_status.add_argument("--static-staging-receipt", type=Path, required=True)
+    phase1_status.add_argument(
+        "--overlay-publication-receipt", type=Path, required=True
+    )
+    phase1_status.add_argument("--preflight-receipt", type=Path, required=True)
+    phase1_status.add_argument("--output", type=Path, required=True)
+
+    phase1_verify = fold_modes.add_parser("phase1-verify", allow_abbrev=False)
+    phase1_verify.add_argument("--completed-evidence", type=Path, required=True)
+    phase1_verify.add_argument("--archive-copy-receipt", type=Path, required=True)
+    phase1_verify.add_argument("--static-staging-receipt", type=Path, required=True)
+    phase1_verify.add_argument(
+        "--overlay-publication-receipt", type=Path, required=True
+    )
+    phase1_verify.add_argument("--preflight-receipt", type=Path, required=True)
+    phase1_verify.add_argument("--submission-receipt", type=Path, required=True)
+    phase1_verify.add_argument("--receipt-output", type=Path, required=True)
+
+    phase1_acquire = fold_modes.add_parser("phase1-acquire", allow_abbrev=False)
+    phase1_acquire.add_argument("--completed-evidence", type=Path, required=True)
+    phase1_acquire.add_argument("--archive-copy-receipt", type=Path, required=True)
+    phase1_acquire.add_argument("--static-staging-receipt", type=Path, required=True)
+    phase1_acquire.add_argument(
+        "--overlay-publication-receipt", type=Path, required=True
+    )
+    phase1_acquire.add_argument("--preflight-receipt", type=Path, required=True)
+    phase1_acquire.add_argument("--submission-receipt", type=Path, required=True)
+    phase1_acquire.add_argument("--terminal-receipt", type=Path, required=True)
+    phase1_acquire.add_argument("--output-dir", type=Path, required=True)
+
+    storage_proof = fold_modes.add_parser("storage-proof", allow_abbrev=False)
+    storage_proof.add_argument("--completed-evidence", type=Path, required=True)
+    storage_proof.add_argument("--archive-copy-receipt", type=Path, required=True)
+    storage_proof.add_argument("--static-staging-receipt", type=Path, required=True)
+    storage_proof.add_argument(
+        "--overlay-publication-receipt", type=Path, required=True
+    )
+    storage_proof.add_argument("--preflight-receipt", type=Path, required=True)
+    storage_proof.add_argument("--submission-receipt", type=Path, required=True)
+    storage_proof.add_argument("--terminal-receipt", type=Path, required=True)
+    storage_proof.add_argument("--acquisition-receipt", type=Path, required=True)
+    storage_proof.add_argument("--acquisition-dir", type=Path, required=True)
+    storage_proof.add_argument(
+        "--phase2-generated-control-file-size",
+        type=int,
+        action="append",
+        required=True,
+    )
+    storage_proof.add_argument("--phase2-output-reserve-bytes", type=int, required=True)
+    storage_proof.add_argument("--safety-reserve-bytes", type=int, required=True)
+    storage_proof.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -212,8 +334,49 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def _load_receipt(path: Path) -> dict[str, Any]:
-    value, _ = config.load_canonical_json_object(_absolute(path, name="receipt"))
+    path = _absolute(path, name="receipt")
+    raw = config._read_regular_file_once(path)
+    try:
+        value = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=config._reject_duplicate_keys,
+            parse_constant=config._reject_nonfinite,
+        )
+    except UnicodeDecodeError as error:
+        raise ValueError(f"Canonical JSON is not UTF-8: {path}") from error
+    if type(value) is not dict:
+        raise TypeError(f"Canonical receipt must contain one object: {path}")
+    if raw not in {
+        config.canonical_json_bytes(value),
+        aws.canonical_json_bytes(value),
+    }:
+        raise ValueError(
+            "Receipt is neither repository-canonical nor compact-canonical JSON: "
+            f"{path}"
+        )
     return value
+
+
+def _load_completed_fold_evidence(path: Path) -> dict[str, Any]:
+    return controlled_supervisor.validate_completed_fold_evidence(_load_receipt(path))
+
+
+def _clients_for_completed_fold(
+    completed_fold_evidence: dict[str, Any],
+) -> aws.AwsClients:
+    region = completed_fold_evidence["training_plan"]["infrastructure"]["region"]
+    return aws.make_clients(region=region)
+
+
+def _load_phase1_context(
+    args: argparse.Namespace,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+    return (
+        _load_completed_fold_evidence(args.completed_evidence),
+        _load_receipt(args.archive_copy_receipt),
+        _load_receipt(args.static_staging_receipt),
+        _load_receipt(args.overlay_publication_receipt),
+    )
 
 
 def _load_training_plan(path: Path) -> dict[str, Any]:
@@ -504,6 +667,204 @@ def main(argv: Sequence[str] | None = None) -> int:
             terminal_receipt=terminal,
             output_bundle=output,
         )
+        return 0
+    if args.command == "fold-processing" and args.fold_mode == "completed-evidence":
+        output = _absolute(args.output, name="output")
+        _require_absent_output(output)
+        evidence = controlled_supervisor.load_completed_fold_evidence(
+            state_dir=_absolute(
+                args.supervisor_state_dir,
+                name="supervisor-state-dir",
+            ),
+            outer_fold=args.outer_fold,
+        )
+        _publish_json(output, evidence)
+        return 0
+    if args.command == "fold-processing" and args.fold_mode == "stage-static":
+        output = _absolute(args.receipt_output, name="receipt-output")
+        state_dir = _absolute(args.state_dir, name="state-dir")
+        _require_absent_output(output)
+        _require_absent_output(state_dir)
+        _require_disjoint_paths(
+            output,
+            state_dir,
+            name="Static staging state and receipt outputs",
+        )
+        completed = _load_completed_fold_evidence(args.completed_evidence)
+        clients = _clients_for_completed_fold(completed)
+        receipt = fold_processing_aws.stage_static_evaluation_inputs_once(
+            clients,
+            completed_fold_evidence=completed,
+            e5_snapshot_dir=_absolute(
+                args.e5_snapshot_dir,
+                name="e5-snapshot-dir",
+            ),
+            e5_snapshot_manifest_path=_absolute(
+                args.e5_snapshot_manifest,
+                name="e5-snapshot-manifest",
+            ),
+            e5_pack_dir=_absolute(args.e5_pack_dir, name="e5-pack-dir"),
+            fixed_base_dir=_absolute(
+                args.fixed_base_dir,
+                name="fixed-base-dir",
+            ),
+            destination_prefix=args.destination_prefix,
+            state_dir=state_dir,
+        )
+        _publish_json(output, receipt)
+        return 0
+    if args.command == "fold-processing" and args.fold_mode == "copy-archives":
+        output = _absolute(args.receipt_output, name="receipt-output")
+        state_dir = _absolute(args.state_dir, name="state-dir")
+        _require_absent_output(output)
+        _require_absent_output(state_dir)
+        _require_disjoint_paths(
+            output,
+            state_dir,
+            name="Archive-copy state and receipt outputs",
+        )
+        completed = _load_completed_fold_evidence(args.completed_evidence)
+        clients = _clients_for_completed_fold(completed)
+        receipt = fold_processing_aws.copy_completed_fold_archives_once(
+            clients,
+            completed_fold_evidence=completed,
+            destination_prefix=args.destination_prefix,
+            state_dir=state_dir,
+        )
+        _publish_json(output, receipt)
+        return 0
+    if args.command == "fold-processing" and args.fold_mode == "phase1-preflight":
+        output = _absolute(args.receipt_output, name="receipt-output")
+        _require_absent_output(output)
+        completed, archive_copy, static_staging, publication = _load_phase1_context(
+            args
+        )
+        clients = _clients_for_completed_fold(completed)
+        receipt = fold_processing_aws.preflight_fold_inventory(
+            clients,
+            completed_fold_evidence=completed,
+            archive_copy_receipt=archive_copy,
+            static_staging_receipt=static_staging,
+            overlay_publication_receipt=publication,
+            job_name=args.job_name,
+            output_prefix=args.output_prefix,
+        )
+        _publish_json(output, receipt)
+        return 0
+    if args.command == "fold-processing" and args.fold_mode == "phase1-submit":
+        output = _absolute(args.receipt_output, name="receipt-output")
+        state_dir = _absolute(args.state_dir, name="state-dir")
+        _require_absent_output(output)
+        _require_absent_output(state_dir)
+        _require_disjoint_paths(
+            output,
+            state_dir,
+            name="Phase-1 submission state and receipt outputs",
+        )
+        completed, archive_copy, static_staging, publication = _load_phase1_context(
+            args
+        )
+        preflight = _load_receipt(args.preflight_receipt)
+        clients = _clients_for_completed_fold(completed)
+        receipt = fold_processing_aws.submit_fold_inventory_once(
+            clients,
+            preflight_receipt=preflight,
+            completed_fold_evidence=completed,
+            archive_copy_receipt=archive_copy,
+            static_staging_receipt=static_staging,
+            overlay_publication_receipt=publication,
+            state_dir=state_dir,
+        )
+        _publish_json(output, receipt)
+        return 0
+    if args.command == "fold-processing" and args.fold_mode == "phase1-status":
+        output = _absolute(args.output, name="output")
+        _require_absent_output(output)
+        completed, archive_copy, static_staging, publication = _load_phase1_context(
+            args
+        )
+        preflight = fold_processing_aws.validate_fold_inventory_preflight_receipt(
+            _load_receipt(args.preflight_receipt),
+            completed_fold_evidence=completed,
+            archive_copy_receipt=archive_copy,
+            static_staging_receipt=static_staging,
+            overlay_publication_receipt=publication,
+        )
+        clients = _clients_for_completed_fold(completed)
+        status = fold_processing_aws.describe_fold_inventory(
+            clients.sagemaker,
+            job_name=preflight["job_name"],
+        )
+        _publish_json(output, status)
+        return 0
+    if args.command == "fold-processing" and args.fold_mode == "phase1-verify":
+        output = _absolute(args.receipt_output, name="receipt-output")
+        _require_absent_output(output)
+        completed, archive_copy, static_staging, publication = _load_phase1_context(
+            args
+        )
+        preflight = _load_receipt(args.preflight_receipt)
+        submission = _load_receipt(args.submission_receipt)
+        clients = _clients_for_completed_fold(completed)
+        terminal = fold_processing_aws.verify_completed_fold_inventory(
+            clients,
+            preflight_receipt=preflight,
+            submission_receipt=submission,
+            completed_fold_evidence=completed,
+            archive_copy_receipt=archive_copy,
+            static_staging_receipt=static_staging,
+            overlay_publication_receipt=publication,
+        )
+        _publish_json(output, terminal)
+        return 0
+    if args.command == "fold-processing" and args.fold_mode == "phase1-acquire":
+        output = _absolute(args.output_dir, name="output-dir")
+        _require_absent_output(output)
+        completed, archive_copy, static_staging, publication = _load_phase1_context(
+            args
+        )
+        preflight = _load_receipt(args.preflight_receipt)
+        submission = _load_receipt(args.submission_receipt)
+        terminal = _load_receipt(args.terminal_receipt)
+        clients = _clients_for_completed_fold(completed)
+        fold_processing_aws.acquire_fold_inventory_once(
+            clients,
+            terminal_receipt=terminal,
+            preflight_receipt=preflight,
+            submission_receipt=submission,
+            completed_fold_evidence=completed,
+            archive_copy_receipt=archive_copy,
+            static_staging_receipt=static_staging,
+            overlay_publication_receipt=publication,
+            output_dir=output,
+        )
+        return 0
+    if args.command == "fold-processing" and args.fold_mode == "storage-proof":
+        output = _absolute(args.output, name="output")
+        _require_absent_output(output)
+        completed, archive_copy, static_staging, publication = _load_phase1_context(
+            args
+        )
+        proof = fold_processing_aws.build_fold_storage_proof(
+            acquisition_receipt=_load_receipt(args.acquisition_receipt),
+            acquisition_dir=_absolute(
+                args.acquisition_dir,
+                name="acquisition-dir",
+            ),
+            terminal_receipt=_load_receipt(args.terminal_receipt),
+            preflight_receipt=_load_receipt(args.preflight_receipt),
+            submission_receipt=_load_receipt(args.submission_receipt),
+            completed_fold_evidence=completed,
+            archive_copy_receipt=archive_copy,
+            static_staging_receipt=static_staging,
+            overlay_publication_receipt=publication,
+            phase2_generated_control_file_sizes=(
+                args.phase2_generated_control_file_size
+            ),
+            phase2_output_reserve_bytes=args.phase2_output_reserve_bytes,
+            safety_reserve_bytes=args.safety_reserve_bytes,
+        )
+        _publish_json(output, proof)
         return 0
     if args.command == "aggregate":
         output = _absolute(args.output, name="output")
