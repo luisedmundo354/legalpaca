@@ -9,7 +9,7 @@ import json
 import os
 import platform
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -72,6 +72,12 @@ EXPECTED_FIXED_BASE_NEW_ROWS_SHA256 = (
 )
 EXPECTED_FIXED_BASE_STATE_KEYS_SHA256 = (
     "d715c23e469ddfad4e731db3c01f30ef8b7fc1a6e7117fc37915d845d20386a9"
+)
+LEGACY_PROCESSING_IMAGE_CONTRACT_SHA256 = (
+    "c0dba1f1a2387bce425b6c33f83e5035d3904ccb62de0e4f1422602ead0cbca8"
+)
+FOLD_PROCESSING_IMAGE_CONTRACT_SHA256 = (
+    "364a57629a514c67cc3dec46605d9e2bb7af9779d140e0b0d26cd0f5161e7376"
 )
 _LOWER_SHA256 = re.compile(r"[0-9a-f]{64}")
 _EVALUATION_IMAGE_URI = re.compile(
@@ -1195,6 +1201,7 @@ def _validate_complete_evaluation_plan(
     plan: dict[str, Any],
     *,
     evaluation_plan_sha256: str,
+    expected_image_contract_sha256: str,
 ) -> tuple[EvaluationIdentity, tuple[str, ...], list[dict[str, Any]]]:
     expected_keys = {
         "schema_version",
@@ -1256,9 +1263,12 @@ def _validate_complete_evaluation_plan(
             raise ValueError(f"Complete evaluation plan {name} left the frozen study")
     if plan["baseline_config_sha256"] != EXPECTED_BASELINE_CONFIG_SHA256:
         raise ValueError("Complete evaluation plan baseline configuration changed")
-    if plan["image_contract_sha256"] != (
-        "c0dba1f1a2387bce425b6c33f83e5035d3904ccb62de0e4f1422602ead0cbca8"
+    if (
+        type(expected_image_contract_sha256) is not str
+        or _LOWER_SHA256.fullmatch(expected_image_contract_sha256) is None
     ):
+        raise ValueError("Expected complete-evaluation image contract is malformed")
+    if plan["image_contract_sha256"] != expected_image_contract_sha256:
         raise ValueError("Complete evaluation plan image contract changed")
     if (
         type(plan["image_uri"]) is not str
@@ -1920,12 +1930,15 @@ def run_local_controlled_evaluation_plan(
     )
 
 
-def run_complete_evaluation_plan(
+def _run_complete_evaluation_plan(
     *,
     evaluation_plan_path: Path,
     local_bindings_path: Path,
     output_dir: Path,
     device: str,
+    expected_image_contract_sha256: str,
+    required_role: str | None,
+    validate_image_runtime: Callable[[Path], Mapping[str, Any]],
 ) -> Mapping[str, Any]:
     """Run the exact 12 controlled systems and three frozen baselines serially."""
 
@@ -1941,7 +1954,12 @@ def run_complete_evaluation_plan(
     identity, case_ids, system_plans = _validate_complete_evaluation_plan(
         plan,
         evaluation_plan_sha256=plan_sha256,
+        expected_image_contract_sha256=expected_image_contract_sha256,
     )
+    if required_role not in {None, "test"}:
+        raise ValueError("Complete-evaluation required role invariant is invalid")
+    if required_role is not None and identity.role != required_role:
+        raise ValueError("Complete evaluation must target the held-out test role")
     bindings = _load_exact_json_file(
         local_bindings_path,
         name="complete local bindings",
@@ -2028,8 +2046,6 @@ def run_complete_evaluation_plan(
         or fold_global_data.passage_count != plan["passage_count"]
     ):
         raise RuntimeError("Complete evaluation fold-global counts changed")
-
-    from processing_eval.image_smoke import validate_image_runtime
 
     image_runtime_identity = validate_image_runtime(bound["image_contract_path"])
     runtime_identity = {
@@ -2302,4 +2318,48 @@ def run_complete_evaluation_plan(
             )
             for system_plan in system_plans
         ),
+    )
+
+
+def run_complete_evaluation_plan(
+    *,
+    evaluation_plan_path: Path,
+    local_bindings_path: Path,
+    output_dir: Path,
+    device: str,
+) -> Mapping[str, Any]:
+    """Run a complete evaluation in the original immutable Processing image."""
+
+    from processing_eval.image_smoke import validate_image_runtime
+
+    return _run_complete_evaluation_plan(
+        evaluation_plan_path=evaluation_plan_path,
+        local_bindings_path=local_bindings_path,
+        output_dir=output_dir,
+        device=device,
+        expected_image_contract_sha256=LEGACY_PROCESSING_IMAGE_CONTRACT_SHA256,
+        required_role=None,
+        validate_image_runtime=validate_image_runtime,
+    )
+
+
+def run_complete_fold_evaluation_plan(
+    *,
+    evaluation_plan_path: Path,
+    local_bindings_path: Path,
+    output_dir: Path,
+    device: str,
+) -> Mapping[str, Any]:
+    """Run a complete evaluation in the exact fold-artifact overlay image."""
+
+    from processing_fold_eval.image_smoke import validate_image_runtime
+
+    return _run_complete_evaluation_plan(
+        evaluation_plan_path=evaluation_plan_path,
+        local_bindings_path=local_bindings_path,
+        output_dir=output_dir,
+        device=device,
+        expected_image_contract_sha256=FOLD_PROCESSING_IMAGE_CONTRACT_SHA256,
+        required_role="test",
+        validate_image_runtime=validate_image_runtime,
     )

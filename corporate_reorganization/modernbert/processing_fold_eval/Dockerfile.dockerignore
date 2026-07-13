@@ -1,0 +1,14 @@
+**
+!processing_fold_eval/__init__.py
+!processing_fold_eval/archive_bridge.py
+!processing_fold_eval/build_context.py
+!processing_fold_eval/build_context_manifest.json
+!processing_fold_eval/Dockerfile
+!processing_fold_eval/evaluate_sm.py
+!processing_fold_eval/image_contract.json
+!processing_fold_eval/image_smoke.py
+!processing_fold_eval/inventory_sm.py
+!retriever/artifacts.py
+!retriever/evaluator.py
+!retriever/provenance.py
+!retriever/staged_data.py

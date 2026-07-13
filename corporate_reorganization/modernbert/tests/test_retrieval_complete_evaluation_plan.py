@@ -23,7 +23,10 @@ from retriever.evaluator import (  # noqa: E402
     BM25_SYSTEM_TYPE,
     CONTROLLED_DUAL_ENCODER_SYSTEM_TYPE,
     E5_SYSTEM_TYPE,
+    FOLD_PROCESSING_IMAGE_CONTRACT_SHA256,
     FIXED_BASE_SYSTEM_TYPE,
+    LEGACY_PROCESSING_IMAGE_CONTRACT_SHA256,
+    _run_complete_evaluation_plan,
     _validate_complete_evaluation_plan,
     _validate_complete_local_bindings,
     run_complete_evaluation_plan,
@@ -706,6 +709,7 @@ class CompleteEvaluationPlanTest(unittest.TestCase):
         identity, case_ids, systems = _validate_complete_evaluation_plan(
             _plan(),
             evaluation_plan_sha256="e" * 64,
+            expected_image_contract_sha256=LEGACY_PROCESSING_IMAGE_CONTRACT_SHA256,
         )
         self.assertEqual(identity.outer_fold, 0)
         self.assertEqual(len(case_ids), 9)
@@ -719,6 +723,61 @@ class CompleteEvaluationPlanTest(unittest.TestCase):
                 CONTROLLED_DUAL_ENCODER_SYSTEM_TYPE,
             },
         )
+
+    def test_legacy_and_fold_entrypoints_reject_each_others_contract(self) -> None:
+        legacy = _plan()
+        fold = _plan()
+        fold["image_contract_sha256"] = FOLD_PROCESSING_IMAGE_CONTRACT_SHA256
+        _validate_complete_evaluation_plan(
+            fold,
+            evaluation_plan_sha256="e" * 64,
+            expected_image_contract_sha256=FOLD_PROCESSING_IMAGE_CONTRACT_SHA256,
+        )
+        for plan, expected in (
+            (legacy, FOLD_PROCESSING_IMAGE_CONTRACT_SHA256),
+            (fold, LEGACY_PROCESSING_IMAGE_CONTRACT_SHA256),
+        ):
+            with self.assertRaisesRegex(ValueError, "image contract changed"):
+                _validate_complete_evaluation_plan(
+                    plan,
+                    evaluation_plan_sha256="e" * 64,
+                    expected_image_contract_sha256=expected,
+                )
+
+    def test_fold_evaluator_rejects_a_valid_validation_role_plan(self) -> None:
+        plan = _plan()
+        validation = json.loads(FOLDS_PATH.read_bytes())["rotations"][0]["validation"]
+        plan.update(
+            {
+                "role": "validation",
+                "case_ids": validation["case_ids"],
+                "query_count": validation["queries"],
+                "passage_count": validation["passages"],
+                "image_contract_sha256": FOLD_PROCESSING_IMAGE_CONTRACT_SHA256,
+            }
+        )
+        identity, _, _ = _validate_complete_evaluation_plan(
+            plan,
+            evaluation_plan_sha256="e" * 64,
+            expected_image_contract_sha256=FOLD_PROCESSING_IMAGE_CONTRACT_SHA256,
+        )
+        self.assertEqual(identity.role, "validation")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            plan_path = root / "validation-plan.json"
+            plan_path.write_bytes(_canonical_bytes(plan))
+            with self.assertRaisesRegex(ValueError, "held-out test role"):
+                _run_complete_evaluation_plan(
+                    evaluation_plan_path=plan_path,
+                    local_bindings_path=root / "absent-bindings.json",
+                    output_dir=root / "output",
+                    device="cuda:0",
+                    expected_image_contract_sha256=(
+                        FOLD_PROCESSING_IMAGE_CONTRACT_SHA256
+                    ),
+                    required_role="test",
+                    validate_image_runtime=mock.Mock(),
+                )
 
     def test_missing_cell_wrong_view_pack_hash_and_mutable_image_fail(self) -> None:
         mutations = []
@@ -779,6 +838,9 @@ class CompleteEvaluationPlanTest(unittest.TestCase):
                 _validate_complete_evaluation_plan(
                     plan,
                     evaluation_plan_sha256="e" * 64,
+                    expected_image_contract_sha256=(
+                        LEGACY_PROCESSING_IMAGE_CONTRACT_SHA256
+                    ),
                 )
 
     def test_discriminated_local_bindings_require_absent_scratch_and_exact_order(self) -> None:
@@ -786,6 +848,7 @@ class CompleteEvaluationPlanTest(unittest.TestCase):
         _, _, systems = _validate_complete_evaluation_plan(
             plan,
             evaluation_plan_sha256="e" * 64,
+            expected_image_contract_sha256=LEGACY_PROCESSING_IMAGE_CONTRACT_SHA256,
         )
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
