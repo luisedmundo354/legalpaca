@@ -301,6 +301,17 @@ Step-2-frozen experiment specification.
   is success, while Failed and Stopped are sealed as explicit failure evidence
   before the CLI fails loudly. It has no waiter, mutation retry, resource
   fallback, or automatic reconciliation path.
+- controlled_supervisor.py is the restart-safe coordinator for only the 60
+  controlled runs. It initializes an absent-only state tree only after complete
+  contextual revalidation of the matching v3 determinism gate, fixes the queue
+  as 15 matched `(fold, seed)` quartets, and keeps at most four locally sealed
+  submissions active with immediate schedule-order backfill. Each live
+  preflight remains memory-only until an absent-only create intent is durably
+  published immediately before the one CreateTrainingJob call. An intent
+  without its submission receipt is permanently ambiguous and stops; it is
+  never retried, reconciled, or adopted. Terminal failure evidence is published
+  before the coordinator stops and no later run is launched. Corrected-legacy
+  and determinism-smoke runs cannot enter the schedule.
 - training_artifacts.py is the read-only post-training acquisition boundary.
   It accepts only a recursively validated successful terminal chain, discovers
   exactly one current version at the request-derived model key, downloads that
