@@ -221,11 +221,9 @@ class DryManifestTest(unittest.TestCase):
             self.assertEqual(
                 dry["execution"],
                 {
-                    "blockers": [
-                        "remote_training_preflight_and_submission_not_implemented"
-                    ],
-                    "status": "blocked",
-                    "submittable": False,
+                    "blockers": [],
+                    "status": "ready",
+                    "submittable": True,
                 },
             )
             self.assertEqual(len(controlled), 60)
@@ -358,14 +356,14 @@ class DryManifestTest(unittest.TestCase):
             ):
                 manifest.validate_dry_manifest(invalid_corrected_legacy)
 
-            falsely_submittable = copy.deepcopy(dry)
-            falsely_submittable["execution"] = {
-                "blockers": [],
-                "status": "ready",
-                "submittable": True,
+            falsely_blocked = copy.deepcopy(dry)
+            falsely_blocked["execution"] = {
+                "blockers": ["unexpected_blocker"],
+                "status": "blocked",
+                "submittable": False,
             }
-            with self.assertRaisesRegex(ValueError, "non-submittable"):
-                manifest.validate_dry_manifest(falsely_submittable)
+            with self.assertRaisesRegex(ValueError, "ready and unblocked"):
+                manifest.validate_dry_manifest(falsely_blocked)
 
             manifest_mutations = []
             changed_channel = copy.deepcopy(dry)

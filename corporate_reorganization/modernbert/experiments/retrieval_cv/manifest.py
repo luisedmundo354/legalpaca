@@ -26,9 +26,7 @@ MANIFEST_TYPE = "retrieval_cv_training_plan"
 CONTROLLED_KIND = "controlled_full"
 LEGACY_KIND = "corrected_legacy_diagnostic"
 SMOKE_KIND = "determinism_smoke"
-EXECUTION_BLOCKERS = (
-    "remote_training_preflight_and_submission_not_implemented",
-)
+EXECUTION_BLOCKERS: tuple[str, ...] = ()
 EXPECTED_BUNDLER_RUNTIME = {
     "python": "3.11.13",
     "zlib_compile": "1.2.13",
@@ -981,7 +979,7 @@ def build_dry_manifest(
     attempt_id: str = "a1",
     parent_manifest_sha256: str | None = None,
 ) -> dict[str, Any]:
-    """Expand the exact blocked 60+2+2 training plan in canonical order."""
+    """Expand the exact ready 60+2+2 training plan in canonical order."""
 
     scientific = strict_config.validate_scientific_config(copy.deepcopy(dict(scientific_config)))
     aws_config = strict_config.validate_aws_local_config(copy.deepcopy(dict(aws_local_config)))
@@ -1129,8 +1127,8 @@ def build_dry_manifest(
         "study": copy.deepcopy(scientific["study"]),
         "execution": {
             "blockers": list(EXECUTION_BLOCKERS),
-            "status": "blocked",
-            "submittable": False,
+            "status": "ready",
+            "submittable": True,
         },
         "sources": {
             "git_commit": scientific["sources"]["git_commit"],
@@ -1376,10 +1374,10 @@ def validate_dry_manifest(value: object) -> dict[str, Any]:
     )
     if execution != {
         "blockers": list(EXECUTION_BLOCKERS),
-        "status": "blocked",
-        "submittable": False,
+        "status": "ready",
+        "submittable": True,
     }:
-        raise ValueError("Training plan must remain explicitly non-submittable")
+        raise ValueError("Training plan must be explicitly ready and unblocked")
     attempt = _validate_attempt(manifest["attempt"])
     _validate_study(manifest["study"])
     sources = _validate_sources(manifest["sources"])

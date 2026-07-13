@@ -78,7 +78,13 @@ def _scientific_config() -> dict[str, object]:
     return value
 
 
-def _training_plan(root: Path) -> tuple[dict[str, object], Path]:
+def _training_plan(
+    root: Path,
+    *,
+    attempt_id: str = "a1",
+    parent_manifest_sha256: str | None = None,
+) -> tuple[dict[str, object], Path]:
+    root.mkdir(parents=True, exist_ok=True)
     source = root / "source"
     source.mkdir()
     (source / "train_sm.py").write_text("raise SystemExit(0)\n", encoding="utf-8")
@@ -99,69 +105,42 @@ def _training_plan(root: Path) -> tuple[dict[str, object], Path]:
         scientific_config=_scientific_config(),
         aws_local_config=aws_config(),
         source_bundle=bundle,
+        attempt_id=attempt_id,
+        parent_manifest_sha256=parent_manifest_sha256,
     )
     return plan, final_path
 
 
 def _staging_receipt(plan: dict[str, object]) -> dict[str, object]:
-    bucket = plan["infrastructure"]["artifact_bucket"]
-    channels = {
-        name: plan["controlled_runs"][0]["input_channels"][name]["s3_uri"] + "/"
-        for name in ("base_model", "data")
-    }
-    prefixes = {
-        "base_model": channels["base_model"].removeprefix(f"s3://{bucket}/"),
-        "data": channels["data"].removeprefix(f"s3://{bucket}/"),
-        "source": (
-            f"{plan['infrastructure']['artifact_root_prefix']}/training-inputs/"
-            f"source-{plan['sources']['source_bundle_sha256']}/"
-        ),
-    }
-    channels["source"] = f"s3://{bucket}/{prefixes['source']}"
-    expected = {
-        "base_model": training_aws._SNAPSHOT_FILES,
-        "data": training_aws._DATASET_FILES,
-        "source": {
-            plan["sources"]["source_bundle_path"]: (
-                plan["sources"]["source_bundle_size"],
-                plan["sources"]["source_bundle_sha256"],
-            )
-        },
-    }
+    input_contract = training_aws.build_training_input_contract(
+        training_plan=plan
+    )
+    bucket = input_contract["artifact_bucket"]
     records = []
-    for group, files in expected.items():
-        for relative, (size, digest) in files.items():
-            records.append(
-                {
-                    "bucket": bucket,
-                    "etag": f'"{len(records):032x}"',
-                    "group": group,
-                    "key": prefixes[group] + relative,
-                    "logical_path": relative,
-                    "schema_version": 1,
-                    "sha256": digest,
-                    "size": size,
-                    "sse": "AES256",
-                    "version_id": f"version-{len(records):02d}",
-                }
-            )
+    for expected in input_contract["expected_objects"]:
+        records.append(
+            {
+                "bucket": bucket,
+                "etag": f'"{len(records):032x}"',
+                "group": expected["group"],
+                "key": expected["key"],
+                "logical_path": expected["logical_path"],
+                "schema_version": 1,
+                "sha256": expected["sha256"],
+                "size": expected["size"],
+                "sse": "AES256",
+                "version_id": f"version-{len(records):02d}",
+            }
+        )
     records.sort(key=lambda record: record["key"])
     return {
-        "channels": channels,
-        "input_contracts": {
-            "dataset_manifest_sha256": training_aws.DATASET_MANIFEST_SHA256,
-            "model_snapshot_manifest_sha256": (
-                training_aws.SNAPSHOT_MANIFEST_SHA256
-            ),
-            "model_snapshot_tree_sha256": (
-                provenance.EXPECTED_SNAPSHOT_TREE_SHA256
-            ),
-        },
+        "input_contract": input_contract,
+        "input_contract_sha256": (
+            training_aws.training_input_contract_sha256(training_plan=plan)
+        ),
         "objects": records,
-        "plan_sha256": aws.sha256_bytes(aws.canonical_json_bytes(plan)),
-        "prefixes": prefixes,
         "protocol": training_aws.TRAINING_STAGING_PROTOCOL,
-        "schema_version": 1,
+        "schema_version": 2,
     }
 
 
@@ -300,7 +279,9 @@ class ControlledTrainingRequestTest(unittest.TestCase):
                         "S3DataSource": {
                             "S3DataDistributionType": "FullyReplicated",
                             "S3DataType": "S3Prefix",
-                            "S3Uri": self.staging["channels"][name],
+                            "S3Uri": self.staging["input_contract"]["channels"][
+                                name
+                            ],
                         }
                     },
                     "InputMode": "File",
@@ -328,7 +309,10 @@ class ControlledTrainingRequestTest(unittest.TestCase):
                 "VolumeSizeInGB": 200,
             },
             "RoleArn": ROLE,
-            "StoppingCondition": {"MaxRuntimeInSeconds": 86_400},
+            "StoppingCondition": {
+                "MaxPendingTimeInSeconds": 7_200,
+                "MaxRuntimeInSeconds": 86_400,
+            },
             "Tags": [
                 {"Key": key, "Value": training_aws.TRAINING_TAGS[key]}
                 for key in sorted(training_aws.TRAINING_TAGS)
@@ -336,6 +320,7 @@ class ControlledTrainingRequestTest(unittest.TestCase):
             "TrainingJobName": self.run["job_name"],
         }
         self.assertEqual(request, expected)
+        self.assertNotIn("RetryStrategy", request)
         self.assertEqual(
             request["HyperParameters"]["sagemaker_program"], '"bootstrap.py"'
         )
@@ -381,7 +366,7 @@ class ControlledTrainingRequestTest(unittest.TestCase):
         changed_toolkit["toolkit_provenance"]["mapping_py_sha256"] = "0" * 64
         attacks.append(changed_toolkit)
         changed_staging = copy.deepcopy(self.staging)
-        changed_staging["channels"]["data"] += "-other"
+        changed_staging["input_contract"]["channels"]["data"] += "-other"
         with self.assertRaises(ValueError):
             training_aws.render_controlled_training_request(
                 training_plan=self.plan,
@@ -389,10 +374,10 @@ class ControlledTrainingRequestTest(unittest.TestCase):
                 staging_receipt=changed_staging,
             )
         sibling_scope = copy.deepcopy(self.staging)
-        sibling_scope["channels"]["data"] = sibling_scope["channels"][
-            "data"
-        ].removesuffix("/")
-        with self.assertRaisesRegex(ValueError, "channel URIs"):
+        sibling_scope["input_contract"]["channels"]["data"] = sibling_scope[
+            "input_contract"
+        ]["channels"]["data"].removesuffix("/")
+        with self.assertRaisesRegex(ValueError, "input contract"):
             training_aws.render_controlled_training_request(
                 training_plan=self.plan,
                 run_id=self.run["run_id"],
@@ -590,6 +575,14 @@ class CorrectedLegacyTrainingRequestTest(unittest.TestCase):
                 )
                 self.assertTrue(request["EnableNetworkIsolation"])
                 self.assertFalse(request["EnableManagedSpotTraining"])
+                self.assertEqual(
+                    request["StoppingCondition"],
+                    {
+                        "MaxPendingTimeInSeconds": 7_200,
+                        "MaxRuntimeInSeconds": 86_400,
+                    },
+                )
+                self.assertNotIn("RetryStrategy", request)
                 self.assertEqual(request["Environment"]["PYTHONHASHSEED"], "17")
                 self.assertEqual(
                     request["Environment"]["ARR_TRAINING_REQUEST_PAYLOAD_SHA256"],
@@ -782,6 +775,14 @@ class DeterminismSmokeTrainingRequestTest(unittest.TestCase):
         )
         self.assertTrue(request["EnableNetworkIsolation"])
         self.assertFalse(request["EnableManagedSpotTraining"])
+        self.assertEqual(
+            request["StoppingCondition"],
+            {
+                "MaxPendingTimeInSeconds": 7_200,
+                "MaxRuntimeInSeconds": 86_400,
+            },
+        )
+        self.assertNotIn("RetryStrategy", request)
         self.assertFalse(any("replica" in key.lower() for key in request["Environment"]))
 
     def test_two_receipts_are_exactly_equivalent_outside_launch_coordinates(self) -> None:
@@ -955,11 +956,286 @@ class DeterminismSmokeTrainingRequestTest(unittest.TestCase):
 class TrainingStagingReceiptTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
-        self.plan, _ = _training_plan(Path(self.temporary.name))
+        self.root = Path(self.temporary.name)
+        self.plan, _ = _training_plan(self.root)
         self.receipt = _staging_receipt(self.plan)
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
+
+    def test_v2_receipt_has_one_exact_attempt_independent_input_contract(self) -> None:
+        self.assertEqual(
+            set(self.receipt),
+            {
+                "input_contract",
+                "input_contract_sha256",
+                "objects",
+                "protocol",
+                "schema_version",
+            },
+        )
+        self.assertNotIn("plan_sha256", self.receipt)
+        self.assertEqual(self.receipt["schema_version"], 2)
+        self.assertEqual(
+            self.receipt["protocol"],
+            "retrieval_cv_training_input_staging_v2",
+        )
+        contract = self.receipt["input_contract"]
+        self.assertEqual(
+            set(contract),
+            {
+                "account_id",
+                "artifact_bucket",
+                "channels",
+                "dataset",
+                "expected_objects",
+                "model",
+                "prefixes",
+                "schema_version",
+                "source",
+            },
+        )
+        self.assertEqual(contract["schema_version"], 1)
+        self.assertEqual(contract["account_id"], ACCOUNT)
+        self.assertEqual(contract["artifact_bucket"], "ir-sagemaker")
+        self.assertEqual(set(contract["channels"]), {"base_model", "data", "source"})
+        self.assertEqual(set(contract["prefixes"]), {"base_model", "data", "source"})
+        self.assertEqual(
+            contract["dataset"],
+            {"manifest_sha256": training_aws.DATASET_MANIFEST_SHA256},
+        )
+        self.assertEqual(
+            contract["model"],
+            {
+                "snapshot_manifest_sha256": (
+                    training_aws.SNAPSHOT_MANIFEST_SHA256
+                ),
+                "snapshot_tree_sha256": provenance.EXPECTED_SNAPSHOT_TREE_SHA256,
+            },
+        )
+        self.assertEqual(
+            contract["source"],
+            {
+                "bundler_runtime": self.plan["sources"]["bundler_runtime"],
+                "commit_epoch": self.plan["sources"]["commit_epoch"],
+                "git_commit": self.plan["sources"]["git_commit"],
+                "git_tree": self.plan["sources"]["git_tree"],
+                "inventory_sha256": self.plan["sources"][
+                    "source_inventory_sha256"
+                ],
+                "path": self.plan["sources"]["source_bundle_path"],
+                "sha256": self.plan["sources"]["source_bundle_sha256"],
+                "size": self.plan["sources"]["source_bundle_size"],
+            },
+        )
+        self.assertEqual(len(contract["expected_objects"]), 12)
+        self.assertEqual(
+            [
+                {
+                    key: record[key]
+                    for key in ("group", "key", "logical_path", "sha256", "size")
+                }
+                for record in self.receipt["objects"]
+            ],
+            contract["expected_objects"],
+        )
+        self.assertEqual(
+            self.receipt["input_contract_sha256"],
+            training_aws.training_input_contract_sha256(
+                training_plan=self.plan
+            ),
+        )
+
+    def test_same_receipt_is_reusable_by_a2_with_identical_inputs(self) -> None:
+        a1_sha256 = aws.sha256_bytes(aws.canonical_json_bytes(self.plan))
+        a2_plan, _ = _training_plan(
+            self.root / "attempt-a2",
+            attempt_id="a2",
+            parent_manifest_sha256=a1_sha256,
+        )
+        self.assertNotEqual(
+            aws.sha256_bytes(aws.canonical_json_bytes(a2_plan)),
+            a1_sha256,
+        )
+        self.assertEqual(
+            training_aws.build_training_input_contract(training_plan=a2_plan),
+            self.receipt["input_contract"],
+        )
+        self.assertEqual(
+            training_aws.validate_training_staging_receipt(
+                self.receipt,
+                training_plan=a2_plan,
+            ),
+            self.receipt,
+        )
+        self.assertEqual(
+            training_aws.verify_remote_training_staging(
+                self._remote(),
+                training_plan=a2_plan,
+                staging_receipt=self.receipt,
+                deep_read=False,
+            ),
+            self.receipt,
+        )
+
+    def test_input_contract_rejects_location_and_content_identity_drift(self) -> None:
+        mutations = []
+
+        changed = copy.deepcopy(self.receipt)
+        changed["input_contract"]["account_id"] = "111122223333"
+        mutations.append(("account", changed))
+
+        changed = copy.deepcopy(self.receipt)
+        changed["input_contract"]["artifact_bucket"] = "other-bucket"
+        mutations.append(("bucket", changed))
+
+        changed = copy.deepcopy(self.receipt)
+        changed["input_contract"]["channels"]["data"] += "other/"
+        mutations.append(("channel", changed))
+
+        changed = copy.deepcopy(self.receipt)
+        changed["input_contract"]["prefixes"]["base_model"] += "other/"
+        mutations.append(("prefix", changed))
+
+        changed = copy.deepcopy(self.receipt)
+        changed["input_contract"]["dataset"]["manifest_sha256"] = "0" * 64
+        mutations.append(("dataset", changed))
+
+        changed = copy.deepcopy(self.receipt)
+        changed["input_contract"]["model"]["snapshot_manifest_sha256"] = "0" * 64
+        mutations.append(("model_manifest", changed))
+
+        changed = copy.deepcopy(self.receipt)
+        changed["input_contract"]["model"]["snapshot_tree_sha256"] = "0" * 64
+        mutations.append(("model_tree", changed))
+
+        source_replacements = {
+            "bundler_runtime": {
+                **self.receipt["input_contract"]["source"]["bundler_runtime"],
+                "python": "changed",
+            },
+            "commit_epoch": self.receipt["input_contract"]["source"][
+                "commit_epoch"
+            ]
+            + 1,
+            "git_commit": "f" * 40,
+            "git_tree": "e" * 40,
+            "inventory_sha256": "0" * 64,
+            "path": "other-source.tar.gz",
+            "sha256": "0" * 64,
+            "size": self.receipt["input_contract"]["source"]["size"] + 1,
+        }
+        for field, replacement in source_replacements.items():
+            changed = copy.deepcopy(self.receipt)
+            changed["input_contract"]["source"][field] = replacement
+            mutations.append((f"source_{field}", changed))
+
+        changed = copy.deepcopy(self.receipt)
+        changed["input_contract"]["expected_objects"][0]["sha256"] = "0" * 64
+        mutations.append(("object_content", changed))
+
+        for name, changed in mutations:
+            changed["input_contract_sha256"] = aws.sha256_bytes(
+                aws.canonical_json_bytes(changed["input_contract"])
+            )
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(ValueError, "input contract"):
+                    training_aws.validate_training_staging_receipt(
+                        changed,
+                        training_plan=self.plan,
+                    )
+
+    def test_input_contract_rejects_schema_types_and_cross_run_channel_drift(self) -> None:
+        malformed = []
+        changed = copy.deepcopy(self.receipt)
+        changed["schema_version"] = True
+        malformed.append(changed)
+        changed = copy.deepcopy(self.receipt)
+        changed["input_contract"]["schema_version"] = True
+        malformed.append(changed)
+        changed = copy.deepcopy(self.receipt)
+        changed["input_contract"]["source"]["size"] = float(
+            changed["input_contract"]["source"]["size"]
+        )
+        malformed.append(changed)
+        changed = copy.deepcopy(self.receipt)
+        changed["input_contract"]["unexpected"] = None
+        malformed.append(changed)
+        for changed in malformed:
+            with self.subTest(changed=changed):
+                with self.assertRaises((TypeError, ValueError)):
+                    training_aws.validate_training_staging_receipt(
+                        changed,
+                        training_plan=self.plan,
+                    )
+
+        changed_hash = copy.deepcopy(self.receipt)
+        changed_hash["input_contract_sha256"] = "0" * 64
+        with self.assertRaisesRegex(ValueError, "input-contract hash"):
+            training_aws.validate_training_staging_receipt(
+                changed_hash,
+                training_plan=self.plan,
+            )
+
+        class AlwaysEqual:
+            def __eq__(self, other: object) -> bool:
+                return True
+
+        non_json = copy.deepcopy(self.receipt)
+        non_json["input_contract"]["source"]["path"] = AlwaysEqual()
+        with self.assertRaisesRegex(TypeError, "non-JSON"):
+            training_aws.validate_training_staging_receipt(
+                non_json,
+                training_plan=self.plan,
+            )
+
+        cross_run_drift = copy.deepcopy(self.plan)
+        identity = training_aws.DATASET_MANIFEST_SHA256
+        cross_run_drift["auxiliary_runs"][0]["input_channels"]["data"][
+            "s3_uri"
+        ] = f"s3://ir-sagemaker/different-dataset-prefix-{identity}"
+        with self.assertRaisesRegex(ValueError, "same exact input channels"):
+            training_aws.build_training_input_contract(
+                training_plan=cross_run_drift
+            )
+
+        dataset_drift = copy.deepcopy(self.plan)
+        dataset_identity = "0" * 64
+        dataset_drift["study"]["dataset_manifest_sha256"] = dataset_identity
+        for run in (
+            *dataset_drift["controlled_runs"],
+            *dataset_drift["auxiliary_runs"],
+        ):
+            run["input_channels"]["data"] = {
+                "identity_sha256": dataset_identity,
+                "s3_uri": (
+                    "s3://ir-sagemaker/arr-retrieval-cv/inputs/dataset-"
+                    + dataset_identity
+                ),
+            }
+        with self.assertRaisesRegex(ValueError, "dataset identity"):
+            training_aws.build_training_input_contract(
+                training_plan=dataset_drift
+            )
+
+        model_drift = copy.deepcopy(self.plan)
+        model_identity = "0" * 64
+        model_drift["study"]["model_snapshot_tree_sha256"] = model_identity
+        for run in (
+            *model_drift["controlled_runs"],
+            *model_drift["auxiliary_runs"],
+        ):
+            run["input_channels"]["base_model"] = {
+                "identity_sha256": model_identity,
+                "s3_uri": (
+                    "s3://ir-sagemaker/arr-retrieval-cv/inputs/modernbert-"
+                    + model_identity
+                ),
+            }
+        with self.assertRaisesRegex(ValueError, "model identity"):
+            training_aws.build_training_input_contract(
+                training_plan=model_drift
+            )
 
     def _remote(self) -> Mock:
         s3 = Mock()
@@ -1060,7 +1336,10 @@ class TrainingStagingReceiptTest(unittest.TestCase):
             patch.object(
                 training_aws,
                 "_staging_descriptors",
-                return_value=(self.receipt["prefixes"], descriptors),
+                return_value=(
+                    self.receipt["input_contract"]["prefixes"],
+                    descriptors,
+                ),
             ),
             patch.object(aws, "validate_artifact_bucket") as validate_bucket,
             patch.object(aws, "assert_unused_versioned_prefix", unused),
@@ -1116,7 +1395,9 @@ class TrainingStagingReceiptTest(unittest.TestCase):
 
         def with_extra(**request: object) -> dict[str, object]:
             response = original(**request)
-            if request["Prefix"] == self.receipt["prefixes"]["source"]:
+            if request["Prefix"] == self.receipt["input_contract"]["prefixes"][
+                "source"
+            ]:
                 response["Versions"].append(
                     {
                         "ETag": '"00000000000000000000000000000000"',
@@ -1139,7 +1420,7 @@ class TrainingStagingReceiptTest(unittest.TestCase):
 
     def test_version_pagination_and_deep_read_byte_drift_helpers(self) -> None:
         s3 = Mock()
-        prefix = self.receipt["prefixes"]["source"]
+        prefix = self.receipt["input_contract"]["prefixes"]["source"]
         record = next(
             row for row in self.receipt["objects"] if row["group"] == "source"
         )

@@ -22,7 +22,7 @@ from . import config as strict_config
 from . import manifest
 
 
-TRAINING_STAGING_PROTOCOL = "retrieval_cv_training_input_staging_v1"
+TRAINING_STAGING_PROTOCOL = "retrieval_cv_training_input_staging_v2"
 CONTROLLED_REQUEST_PROTOCOL = "retrieval_cv_controlled_training_request_v1"
 DETERMINISM_SMOKE_REQUEST_PROTOCOL = (
     "retrieval_cv_determinism_smoke_training_request_v1"
@@ -52,6 +52,9 @@ BOOTSTRAP_SUBMIT_DIRECTORY = "/opt/training_bootstrap"
 SOURCE_CHANNEL_DIRECTORY = "/opt/ml/input/data/source"
 SNAPSHOT_MANIFEST_SHA256 = (
     "0807d16ba5b49a5e30c8b09b72acef7d8c6326823a850640027cc1363ee446b5"
+)
+_MODEL_SNAPSHOT_TREE_SHA256 = (
+    "aca85feea4adb60c4b021eb1a439aff47c844495005f2acdee1baef9d611d63d"
 )
 DATASET_MANIFEST_SHA256 = (
     "cce04197b7f92c851c8e1e0b1fc0ff3f2757911d646a0079236c03070442e4be"
@@ -111,6 +114,7 @@ _RESERVED_HYPERPARAMETERS = {
     "sagemaker_submit_directory",
 }
 _ETAG = re.compile(r'"[0-9a-f]{32}"\Z')
+_TRAINING_MAX_PENDING_SECONDS = 7_200
 
 _DATASET_FILES = {
     "cases.jsonl": (
@@ -541,10 +545,139 @@ def _s3_uri(bucket: str, key: str) -> str:
 
 def _channel_coordinates(plan: Mapping[str, Any]) -> dict[str, tuple[str, str]]:
     first = plan["controlled_runs"][0]["input_channels"]
+    for run in (*plan["controlled_runs"], *plan["auxiliary_runs"]):
+        if run["input_channels"] != first:
+            raise ValueError(
+                "All training runs must use the same exact input channels"
+            )
     coordinates: dict[str, tuple[str, str]] = {}
     for name in ("base_model", "data"):
         coordinates[name] = strict_config._s3_uri_coordinates(first[name]["s3_uri"])
     return coordinates
+
+
+def _training_input_contract_from_plan(
+    plan: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Build the attempt-independent identity of all staged training inputs."""
+
+    if plan["study"]["dataset_manifest_sha256"] != DATASET_MANIFEST_SHA256:
+        raise ValueError("Training input contract dataset identity changed")
+    if (
+        plan["study"]["model_snapshot_tree_sha256"]
+        != _MODEL_SNAPSHOT_TREE_SHA256
+    ):
+        raise ValueError("Training input contract model identity changed")
+    bucket = plan["infrastructure"]["artifact_bucket"]
+    account_id = plan["infrastructure"]["account_id"]
+    channel_coordinates = _channel_coordinates(plan)
+    source = plan["sources"]
+    source_prefix = (
+        f"{plan['infrastructure']['artifact_root_prefix']}/training-inputs/"
+        f"source-{source['source_bundle_sha256']}/"
+    )
+    prefixes = {
+        "base_model": channel_coordinates["base_model"][1] + "/",
+        "data": channel_coordinates["data"][1] + "/",
+        "source": source_prefix,
+    }
+    channels = {
+        name: _s3_uri(bucket, prefixes[name])
+        for name in ("base_model", "data", "source")
+    }
+    for name in ("base_model", "data"):
+        channel_bucket, _ = channel_coordinates[name]
+        if channel_bucket != bucket:
+            raise ValueError(f"{name} input-contract channel bucket changed")
+    if len(set(prefixes.values())) != 3 or any(
+        left.startswith(right) or right.startswith(left)
+        for index, left in enumerate(prefixes.values())
+        for position, right in enumerate(prefixes.values())
+        if index < position
+    ):
+        raise ValueError("Training input-contract prefixes overlap")
+
+    expected_objects: list[dict[str, Any]] = []
+    expected_by_group: tuple[tuple[str, Mapping[str, tuple[int, str]]], ...] = (
+        ("base_model", _SNAPSHOT_FILES),
+        ("data", _DATASET_FILES),
+        (
+            "source",
+            {
+                source["source_bundle_path"]: (
+                    source["source_bundle_size"],
+                    source["source_bundle_sha256"],
+                )
+            },
+        ),
+    )
+    for group, expected in expected_by_group:
+        for logical_path, (size, sha256) in expected.items():
+            expected_objects.append(
+                {
+                    "group": group,
+                    "key": prefixes[group] + logical_path,
+                    "logical_path": logical_path,
+                    "sha256": sha256,
+                    "size": size,
+                }
+            )
+    expected_objects.sort(key=lambda record: record["key"])
+    contract = {
+        "account_id": account_id,
+        "artifact_bucket": bucket,
+        "channels": channels,
+        "dataset": {
+            "manifest_sha256": DATASET_MANIFEST_SHA256,
+        },
+        "expected_objects": expected_objects,
+        "model": {
+            "snapshot_manifest_sha256": SNAPSHOT_MANIFEST_SHA256,
+            "snapshot_tree_sha256": plan["study"][
+                "model_snapshot_tree_sha256"
+            ],
+        },
+        "prefixes": prefixes,
+        "schema_version": 1,
+        "source": {
+            "bundler_runtime": copy.deepcopy(source["bundler_runtime"]),
+            "commit_epoch": source["commit_epoch"],
+            "git_commit": source["git_commit"],
+            "git_tree": source["git_tree"],
+            "inventory_sha256": source["source_inventory_sha256"],
+            "path": source["source_bundle_path"],
+            "sha256": source["source_bundle_sha256"],
+            "size": source["source_bundle_size"],
+        },
+    }
+    _require_plain_json(contract, name="training input contract")
+    return contract
+
+
+def build_training_input_contract(
+    *, training_plan: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Return the canonical input identity shared by compatible attempts."""
+
+    plan = _validated_training_plan(training_plan)
+    return copy.deepcopy(_training_input_contract_from_plan(plan))
+
+
+def _input_contract_sha256(input_contract: Mapping[str, Any]) -> str:
+    _require_plain_json(input_contract, name="training input contract")
+    if type(input_contract) is not dict:
+        raise TypeError("training input contract must be one exact object")
+    return aws.sha256_bytes(aws.canonical_json_bytes(input_contract))
+
+
+def training_input_contract_sha256(
+    *, training_plan: Mapping[str, Any]
+) -> str:
+    """Hash the canonical attempt-independent input contract for one plan."""
+
+    return _input_contract_sha256(
+        build_training_input_contract(training_plan=training_plan)
+    )
 
 
 def _staging_descriptors(
@@ -658,25 +791,6 @@ def _staging_descriptors(
     return prefixes, descriptors
 
 
-def _expected_staged_object_identity(
-    plan: Mapping[str, Any], record: Mapping[str, Any]
-) -> tuple[int, str]:
-    group = record["group"]
-    logical_path = record["logical_path"]
-    if group == "source":
-        if logical_path != plan["sources"]["source_bundle_path"]:
-            raise ValueError("Staged source logical path changed")
-        return (
-            plan["sources"]["source_bundle_size"],
-            plan["sources"]["source_bundle_sha256"],
-        )
-    if group == "data" and logical_path in _DATASET_FILES:
-        return _DATASET_FILES[logical_path]
-    if group == "base_model" and logical_path in _SNAPSHOT_FILES:
-        return _SNAPSHOT_FILES[logical_path]
-    raise ValueError("Staged object group/logical path changed")
-
-
 def validate_training_staging_receipt(
     value: object,
     *,
@@ -686,11 +800,9 @@ def validate_training_staging_receipt(
     receipt = _exact_keys(
         value,
         {
-            "channels",
-            "input_contracts",
+            "input_contract",
+            "input_contract_sha256",
             "objects",
-            "plan_sha256",
-            "prefixes",
             "protocol",
             "schema_version",
         },
@@ -698,57 +810,48 @@ def validate_training_staging_receipt(
     )
     _require_plain_json(receipt, name="training staging receipt")
     if (
-        receipt["schema_version"] != 1
+        receipt["schema_version"] != 2
         or type(receipt["schema_version"]) is not int
         or receipt["protocol"] != TRAINING_STAGING_PROTOCOL
-        or receipt["plan_sha256"] != _plan_sha256(plan)
     ):
         raise ValueError("Training staging receipt identity changed")
-    channels = _exact_keys(
-        receipt["channels"],
-        {"base_model", "data", "source"},
-        name="staged channels",
-    )
-    bucket = plan["infrastructure"]["artifact_bucket"]
-    expected_source_prefix = (
-        f"{plan['infrastructure']['artifact_root_prefix']}/training-inputs/"
-        f"source-{plan['sources']['source_bundle_sha256']}/"
-    )
-    expected_channels = {
-        name: plan["controlled_runs"][0]["input_channels"][name]["s3_uri"] + "/"
-        for name in ("base_model", "data")
-    }
-    expected_channels["source"] = _s3_uri(bucket, expected_source_prefix)
-    if channels != expected_channels:
-        raise ValueError("Staged channel URIs differ from the training plan")
-    input_contracts = _exact_keys(
-        receipt["input_contracts"],
+    input_contract = _exact_keys(
+        receipt["input_contract"],
         {
-            "dataset_manifest_sha256",
-            "model_snapshot_manifest_sha256",
-            "model_snapshot_tree_sha256",
+            "account_id",
+            "artifact_bucket",
+            "channels",
+            "dataset",
+            "expected_objects",
+            "model",
+            "prefixes",
+            "schema_version",
+            "source",
         },
-        name="staged input contracts",
+        name="training input contract",
     )
-    if input_contracts != {
-        "dataset_manifest_sha256": DATASET_MANIFEST_SHA256,
-        "model_snapshot_manifest_sha256": SNAPSHOT_MANIFEST_SHA256,
-        "model_snapshot_tree_sha256": plan["study"]["model_snapshot_tree_sha256"],
-    }:
-        raise ValueError("Staged input contracts changed")
-    prefixes = _exact_keys(
-        receipt["prefixes"], {"base_model", "data", "source"}, name="staged prefixes"
-    )
-    for name in ("base_model", "data"):
-        expected_bucket, expected_prefix = strict_config._s3_uri_coordinates(
-            channels[name].removesuffix("/")
-        )
-        if expected_bucket != bucket or prefixes[name] != expected_prefix + "/":
-            raise ValueError(f"Staged {name} prefix changed")
-    if prefixes["source"] != expected_source_prefix:
-        raise ValueError("Staged source prefix changed")
+    expected_contract = _training_input_contract_from_plan(plan)
+    if aws.canonical_json_bytes(input_contract) != aws.canonical_json_bytes(
+        expected_contract
+    ):
+        raise ValueError("Training staging input contract differs from the plan")
+    expected_contract_sha256 = _input_contract_sha256(expected_contract)
+    if (
+        type(receipt["input_contract_sha256"]) is not str
+        or receipt["input_contract_sha256"] != expected_contract_sha256
+        or _input_contract_sha256(input_contract) != expected_contract_sha256
+    ):
+        raise ValueError("Training staging input-contract hash changed")
+
+    bucket = input_contract["artifact_bucket"]
+    prefixes = input_contract["prefixes"]
+    expected_objects = input_contract["expected_objects"]
+    expected_by_pair = {
+        (record["group"], record["logical_path"]): record
+        for record in expected_objects
+    }
     objects = receipt["objects"]
-    if type(objects) is not list or len(objects) != 12:
+    if type(objects) is not list or len(objects) != len(expected_objects):
         raise ValueError("Training staging receipt must contain exactly 12 objects")
     observed_keys: list[str] = []
     observed_pairs: set[tuple[str, str]] = set()
@@ -786,23 +889,21 @@ def validate_training_staging_receipt(
             or _ETAG.fullmatch(record["etag"]) is None
         ):
             raise ValueError(f"Staged objects[{index}] identity changed")
-        expected_size, expected_sha256 = _expected_staged_object_identity(plan, record)
+        pair = (record["group"], record["logical_path"])
+        expected = expected_by_pair.get(pair)
+        if expected is None or record["key"] != expected["key"]:
+            raise ValueError(f"Staged objects[{index}] logical identity changed")
         if (
-            record["size"] != expected_size
+            record["size"] != expected["size"]
             or type(record["size"]) is not int
-            or record["sha256"] != expected_sha256
+            or record["sha256"] != expected["sha256"]
         ):
             raise ValueError(f"Staged objects[{index}] content identity changed")
-        pair = (record["group"], record["logical_path"])
         if pair in observed_pairs:
             raise ValueError("Training staging receipt contains duplicate logical objects")
         observed_pairs.add(pair)
         observed_keys.append(record["key"])
-    expected_pairs = {
-        ("source", plan["sources"]["source_bundle_path"]),
-        *(("data", path) for path in _DATASET_FILES),
-        *(("base_model", path) for path in _SNAPSHOT_FILES),
-    }
+    expected_pairs = set(expected_by_pair)
     if observed_pairs != expected_pairs or observed_keys != sorted(observed_keys):
         raise ValueError("Training staging receipt object coverage/order changed")
     return copy.deepcopy(receipt)
@@ -913,10 +1014,11 @@ def verify_remote_training_staging(
     receipt = validate_training_staging_receipt(
         dict(staging_receipt), training_plan=plan
     )
-    bucket = plan["infrastructure"]["artifact_bucket"]
-    account = plan["infrastructure"]["account_id"]
+    input_contract = receipt["input_contract"]
+    bucket = input_contract["artifact_bucket"]
+    account = input_contract["account_id"]
     expected_by_key = {record["key"]: record for record in receipt["objects"]}
-    for prefix in receipt["prefixes"].values():
+    for prefix in input_contract["prefixes"].values():
         versions, delete_markers = _list_prefix_versions(
             s3,
             bucket=bucket,
@@ -1006,6 +1108,27 @@ def stage_training_inputs_once(
         base_model_dir=base_model_dir,
         snapshot_manifest_path=snapshot_manifest_path,
     )
+    input_contract = _training_input_contract_from_plan(plan)
+    if prefixes != input_contract["prefixes"]:
+        raise ValueError("Local staging prefixes differ from the input contract")
+    descriptor_identities = [
+        {
+            "group": descriptor["group"],
+            "key": descriptor["key"],
+            "logical_path": descriptor["logical_path"],
+        }
+        for descriptor in descriptors
+    ]
+    contract_identities = [
+        {
+            "group": record["group"],
+            "key": record["key"],
+            "logical_path": record["logical_path"],
+        }
+        for record in input_contract["expected_objects"]
+    ]
+    if descriptor_identities != contract_identities:
+        raise ValueError("Local staging objects differ from the input contract")
     for prefix in sorted(prefixes.values()):
         aws.assert_unused_versioned_prefix(
             s3,
@@ -1030,25 +1153,12 @@ def stage_training_inputs_once(
             }
         )
     objects.sort(key=lambda record: record["key"])
-    channels = {
-        name: plan["controlled_runs"][0]["input_channels"][name]["s3_uri"] + "/"
-        for name in ("base_model", "data")
-    }
-    channels["source"] = _s3_uri(bucket, prefixes["source"])
     receipt = {
-        "channels": channels,
-        "input_contracts": {
-            "dataset_manifest_sha256": DATASET_MANIFEST_SHA256,
-            "model_snapshot_manifest_sha256": SNAPSHOT_MANIFEST_SHA256,
-            "model_snapshot_tree_sha256": plan["study"][
-                "model_snapshot_tree_sha256"
-            ],
-        },
+        "input_contract": input_contract,
+        "input_contract_sha256": _input_contract_sha256(input_contract),
         "objects": objects,
-        "plan_sha256": _plan_sha256(plan),
-        "prefixes": prefixes,
         "protocol": TRAINING_STAGING_PROTOCOL,
-        "schema_version": 1,
+        "schema_version": 2,
     }
     return verify_remote_training_staging(
         s3,
@@ -1186,6 +1296,7 @@ def render_controlled_training_request(
     staged = validate_training_staging_receipt(
         dict(staging_receipt), training_plan=plan
     )
+    staged_contract = staged["input_contract"]
     run = _find_controlled_run(plan, run_id)
     logical = validate_controlled_logical_hyperparameters(run["hyperparameters"])
     if run["cell"] != logical:
@@ -1201,9 +1312,10 @@ def render_controlled_training_request(
         for name in ("base_model", "data")
     }
     expected_staged_channels["source"] = _s3_uri(
-        plan["infrastructure"]["artifact_bucket"], staged["prefixes"]["source"]
+        plan["infrastructure"]["artifact_bucket"],
+        staged_contract["prefixes"]["source"],
     )
-    if staged["channels"] != expected_staged_channels:
+    if staged_contract["channels"] != expected_staged_channels:
         raise ValueError("Controlled run channels differ from staged inputs")
     image_uri = plan["study"]["training_image_uri"]
     if (
@@ -1274,6 +1386,7 @@ def render_controlled_training_request(
         },
         "RoleArn": infrastructure["role_arn"],
         "StoppingCondition": {
+            "MaxPendingTimeInSeconds": _TRAINING_MAX_PENDING_SECONDS,
             "MaxRuntimeInSeconds": infrastructure["training_max_runtime_seconds"]
         },
         "Tags": tags,
@@ -1293,6 +1406,7 @@ def render_determinism_smoke_training_request(
     staged = validate_training_staging_receipt(
         dict(staging_receipt), training_plan=plan
     )
+    staged_contract = staged["input_contract"]
     run = _find_determinism_smoke_run(plan, run_id)
     logical = validate_determinism_smoke_logical_hyperparameters(
         run["hyperparameters"]
@@ -1306,9 +1420,10 @@ def render_determinism_smoke_training_request(
         for name in ("base_model", "data")
     }
     expected_staged_channels["source"] = _s3_uri(
-        plan["infrastructure"]["artifact_bucket"], staged["prefixes"]["source"]
+        plan["infrastructure"]["artifact_bucket"],
+        staged_contract["prefixes"]["source"],
     )
-    if staged["channels"] != expected_staged_channels:
+    if staged_contract["channels"] != expected_staged_channels:
         raise ValueError("Determinism-smoke channels differ from staged inputs")
     image_uri = plan["study"]["training_image_uri"]
     if (
@@ -1396,6 +1511,7 @@ def render_determinism_smoke_training_request(
         },
         "RoleArn": infrastructure["role_arn"],
         "StoppingCondition": {
+            "MaxPendingTimeInSeconds": _TRAINING_MAX_PENDING_SECONDS,
             "MaxRuntimeInSeconds": infrastructure["training_max_runtime_seconds"]
         },
         "Tags": tags,
@@ -1415,6 +1531,7 @@ def render_corrected_legacy_training_request(
     staged = validate_training_staging_receipt(
         dict(staging_receipt), training_plan=plan
     )
+    staged_contract = staged["input_contract"]
     run = _find_corrected_legacy_run(plan, run_id)
     logical = validate_corrected_legacy_logical_hyperparameters(
         run["hyperparameters"]
@@ -1428,9 +1545,10 @@ def render_corrected_legacy_training_request(
         for name in ("base_model", "data")
     }
     expected_staged_channels["source"] = _s3_uri(
-        plan["infrastructure"]["artifact_bucket"], staged["prefixes"]["source"]
+        plan["infrastructure"]["artifact_bucket"],
+        staged_contract["prefixes"]["source"],
     )
-    if staged["channels"] != expected_staged_channels:
+    if staged_contract["channels"] != expected_staged_channels:
         raise ValueError("Corrected-legacy channels differ from staged inputs")
     image_uri = plan["study"]["training_image_uri"]
     if (
@@ -1509,6 +1627,7 @@ def render_corrected_legacy_training_request(
         },
         "RoleArn": infrastructure["role_arn"],
         "StoppingCondition": {
+            "MaxPendingTimeInSeconds": _TRAINING_MAX_PENDING_SECONDS,
             "MaxRuntimeInSeconds": infrastructure["training_max_runtime_seconds"]
         },
         "Tags": tags,
@@ -1808,6 +1927,7 @@ __all__: Sequence[str] = (
     "TRAINING_STAGING_PROTOCOL",
     "TRAINING_TOOLKIT_MAPPING_SHA256",
     "TRAINING_TOOLKIT_VERSION",
+    "build_training_input_contract",
     "build_controlled_training_request_receipt",
     "build_corrected_legacy_training_request_receipt",
     "build_determinism_smoke_training_request_receipt",
@@ -1819,6 +1939,7 @@ __all__: Sequence[str] = (
     "render_toolkit_hyperparameters",
     "stage_training_inputs_once",
     "toolkit_user_command_arguments",
+    "training_input_contract_sha256",
     "validate_controlled_logical_hyperparameters",
     "validate_controlled_training_request_receipt",
     "validate_corrected_legacy_logical_hyperparameters",

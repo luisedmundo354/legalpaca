@@ -286,12 +286,16 @@ verified `train_sm.py`. Caller-provided environment values are treated only as
 requests; the controlled entry point accepts the corresponding provenance only
 after the baked bootstrap has re-emitted independently verified identities.
 
-The `retrieval_cv_training_plan` is intentionally non-submittable. The frozen
-Step-10C source records the derived image digest, runtime inventory, image
-contract, base DLC identity, verified source bundle, and launch-receipt hashes
-in controlled, two-epoch determinism-smoke, and corrected-data legacy-style
-artifacts. All three strict runtime paths and their non-submitting request
-renderers exist. The remaining gate is the remote training coordinator: it
-must preflight, re-render, submit once, and verify the exact described request
-before any training job is submitted. The evaluation-image Processing runtime
-smoke does not waive that gate.
+The ready `retrieval_cv_training_plan` records the frozen Step-10C source,
+derived image digest, runtime inventory, image contract, base DLC identity,
+verified source bundle, and launch-receipt hashes for controlled, two-epoch
+determinism-smoke, and corrected-data legacy-style artifacts. The ready plan is
+usable only through strict host staging and launch coordinators: staging
+publishes the exact twelve immutable inputs once, while launching revalidates
+their versions, rerenders one named request, submits exactly once, and verifies
+the described request and tags. Launching requires the live `ml.g5.12xlarge`
+training quota to be at least four and refuses a launch when four jobs from the
+frozen plan are already active. Every request has a two-hour pending-capacity
+limit and a 24-hour runtime limit, with no SageMaker retry strategy. There is no
+automatic retry, fallback, reconciliation, or waiter; the evaluation-image
+Processing runtime smoke does not waive any training preflight.

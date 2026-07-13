@@ -258,15 +258,18 @@ Step-2-frozen experiment specification.
   `75c1d8fd...`; the Docker stdout formatting hash is not the identity hash.
 - config.py and manifest.py validate canonical configuration bytes, build a
   commit-exact normalized source archive without symlinks, ignored files, or
-  runtime requirements, and expand the exact 60+2+2 training plan.
+  runtime requirements, and expand the exact ready 60+2+2 training plan.
 - aws.py uses low-level, one-attempt Botocore clients for immutable ECR
   publication, checked versioned-S3 primitives, Processing preflight, and one
   explicitly submitted runtime smoke. It never retries or selects a fallback.
-- training_aws.py is a deliberately non-submitting training foundation. It
-  validates and stages exactly one source bundle, six corrected-v2 data files,
-  and five ModernBERT snapshot files under previously unused versioned
-  prefixes; records every VersionId, ETag, size, SHA-256, and SSE setting; and
-  rejects delete markers, extra versions, or non-current objects. It renders a
+- training_aws.py validates and stages exactly one source bundle, six
+  corrected-v2 data files, and five ModernBERT snapshot files under previously
+  unused versioned prefixes; records every VersionId, ETag, size, SHA-256, and
+  SSE setting; and rejects delete markers, extra versions, or non-current
+  objects. Its v2 receipt binds an attempt-independent input contract, so a
+  later explicit attempt may reuse exactly the same immutable versions but
+  cannot change account, bucket, channel, prefix, source, data, model, or
+  object identity. It renders a
   controlled CreateTrainingJob request, either corrected legacy-style
   diagnostic request, or one of the two sealed determinism-smoke requests only
   from a validated plan cell and the matching staging receipt. The smoke
@@ -278,7 +281,21 @@ Step-2-frozen experiment specification.
   request uses three slash-bounded File-mode channels (`base_model`, `data`,
   and `source`) under network isolation. Every MPI rank verifies the mounted
   source archive and its normalized inventory before safe rank-local extraction;
-  no container-side S3 download is permitted.
+  no container-side S3 download is permitted. Every request caps active
+  capacity waiting at 7,200 seconds and running time at 86,400 seconds, while
+  omitting SageMaker's nonzero-only RetryStrategy.
+- training_launch.py is the only training-job mutation boundary. For one named
+  plan run, it deeply revalidates all staged versions, the exact SDK/caller/
+  role/bucket/ECR/quota/offering state, unused job name and output history, and
+  a freshly rendered request. It requires the applied `ml.g5.12xlarge`
+  training quota to be at least four, paginates both active SageMaker states,
+  and refuses to launch when four planned jobs are already active. Submission
+  repeats that complete preflight, requires byte-identical evidence, calls
+  CreateTrainingJob exactly once, and immediately verifies DescribeTrainingJob
+  plus all tags. Status and terminal verification are read-only; only Completed
+  is success, while Failed and Stopped are sealed as explicit failure evidence
+  before the CLI fails loudly. It has no waiter, mutation retry, resource
+  fallback, or automatic reconciliation path.
 - Controlled artifact expectations and exported model identities carry the
   exact plan SHA-256, staging-receipt SHA-256, and five-field source-bundle
   identity in addition to the derived/base image, runtime, contract, and
@@ -301,25 +318,19 @@ Step-2-frozen experiment specification.
   readback. Statistical aggregation, intervals, contrasts, and figures remain
   Step 12.
 
-The training manifest is deliberately
-`retrieval_cv_training_plan`, not a launch manifest. It is hard-blocked and
-cannot be submitted. The scientific source claim is frozen to the exact
-Step-10C commit containing the controlled, corrected-diagnostic, and strict
-2-epoch/6-update determinism paths. The only remaining plan blocker is the
-absent remote training coordinator: it must implement preflight, exact request
-re-rendering, one-shot submission, and Describe/readback verification before
-any submission is exposed. This is an explicit implementation gate, not
-implicit behavior or a fallback.
-The immediate Processing runtime smoke is independent of this blocked plan.
-The training staging coordinator has not been invoked. Before training, its
-single operation validates the bucket, proves all three complete versioned
-prefixes have never contained an object or delete marker, stages all twelve
-objects, and binds every VersionId and readback identity into one receipt.
-Immediately before a later submission, the launcher must re-list the complete
-version history and deeply re-read the named versions. `If-None-Match` alone is
-not treated as historical-prefix immutability. A partial staging failure
-permanently taints that prefix and fails; it is never cleaned up or retried in
-place.
+The ready manifest remains `retrieval_cv_training_plan`: readiness permits only
+the sealed coordinator above and does not itself stage or submit anything. The
+scientific source claim stays frozen to the exact Step-10C commit containing
+the controlled, corrected-diagnostic, and strict 2-epoch/6-update determinism
+paths. Before training, the staging command validates the bucket, proves all
+three complete versioned prefixes have never contained an object or delete
+marker, stages all twelve objects, and binds every VersionId and readback
+identity into one receipt. Immediately before each submission, the launcher
+re-lists complete version history and deeply re-reads the named versions.
+`If-None-Match` alone is not treated as historical-prefix immutability. A
+partial staging failure permanently taints that prefix and fails; it is never
+cleaned up or retried in place. An ambiguous CreateTrainingJob response also
+fails without an automatic retry because that API has no idempotency token.
 
 The immediate Processing smoke is
 `evaluation_image_runtime_smoke_v1`. It validates account-local digest pull,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 from corporate_reorganization.modernbert.experiments.retrieval_cv import cli, config
 
@@ -65,6 +66,22 @@ class RetrievalCvCliTest(unittest.TestCase):
                 "/launch.json",
             ],
             [
+                "stage",
+                "training-inputs",
+                "--manifest",
+                "/launch.json",
+                "--source-bundle",
+                "/source.tar.gz",
+                "--dataset-dir",
+                "/dataset",
+                "--base-model-dir",
+                "/base-model",
+                "--snapshot-manifest",
+                "/snapshot.json",
+                "--receipt-output",
+                "/staging.json",
+            ],
+            [
                 "preflight",
                 "runtime-smoke",
                 "--aws-config",
@@ -77,6 +94,18 @@ class RetrievalCvCliTest(unittest.TestCase):
                 "/receipt.json",
             ],
             [
+                "preflight",
+                "training",
+                "--manifest",
+                "/launch.json",
+                "--staging-receipt",
+                "/staging.json",
+                "--run-id",
+                "determinism-smoke-a",
+                "--receipt-output",
+                "/preflight.json",
+            ],
+            [
                 "submit",
                 "runtime-smoke",
                 "--preflight-receipt",
@@ -85,12 +114,38 @@ class RetrievalCvCliTest(unittest.TestCase):
                 "/submit.json",
             ],
             [
+                "submit",
+                "training",
+                "--manifest",
+                "/launch.json",
+                "--staging-receipt",
+                "/staging.json",
+                "--preflight-receipt",
+                "/preflight.json",
+                "--receipt-output",
+                "/submission.json",
+            ],
+            [
                 "status",
                 "runtime-smoke",
                 "--job-name",
                 "arr-ret-runtime-smoke-a1",
                 "--region",
                 "us-east-1",
+                "--output",
+                "/status.json",
+            ],
+            [
+                "status",
+                "training",
+                "--manifest",
+                "/launch.json",
+                "--staging-receipt",
+                "/staging.json",
+                "--preflight-receipt",
+                "/preflight.json",
+                "--submission-receipt",
+                "/submission.json",
                 "--output",
                 "/status.json",
             ],
@@ -127,6 +182,20 @@ class RetrievalCvCliTest(unittest.TestCase):
                 "--output",
                 "/verified.json",
             ],
+            [
+                "verify",
+                "training",
+                "--manifest",
+                "/launch.json",
+                "--staging-receipt",
+                "/staging.json",
+                "--preflight-receipt",
+                "/preflight.json",
+                "--submission-receipt",
+                "/submission.json",
+                "--output",
+                "/terminal.json",
+            ],
         ]
         for arguments in fixtures:
             with self.subTest(command=arguments[:2]):
@@ -157,6 +226,186 @@ class RetrievalCvCliTest(unittest.TestCase):
             self.assertFalse((output.parent / ".receipt.json.incomplete").exists())
             with self.assertRaises(FileExistsError):
                 cli._publish_json(output, value)
+
+    def test_training_commands_check_absent_output_before_remote_operation(self) -> None:
+        plan = {"infrastructure": {"region": "us-east-1"}}
+        clients = Mock()
+        fixtures = [
+            (
+                [
+                    "stage",
+                    "training-inputs",
+                    "--manifest",
+                    "/plan.json",
+                    "--source-bundle",
+                    "/source.tar.gz",
+                    "--dataset-dir",
+                    "/dataset",
+                    "--base-model-dir",
+                    "/base-model",
+                    "--snapshot-manifest",
+                    "/snapshot.json",
+                    "--receipt-output",
+                    "/receipt.json",
+                ],
+                cli.training_aws,
+                "stage_training_inputs_once",
+            ),
+            (
+                [
+                    "preflight",
+                    "training",
+                    "--manifest",
+                    "/plan.json",
+                    "--staging-receipt",
+                    "/staging.json",
+                    "--run-id",
+                    "determinism-smoke-a",
+                    "--receipt-output",
+                    "/receipt.json",
+                ],
+                cli.training_launch,
+                "preflight_training_job",
+            ),
+            (
+                [
+                    "submit",
+                    "training",
+                    "--manifest",
+                    "/plan.json",
+                    "--staging-receipt",
+                    "/staging.json",
+                    "--preflight-receipt",
+                    "/preflight.json",
+                    "--receipt-output",
+                    "/receipt.json",
+                ],
+                cli.training_launch,
+                "submit_training_job_once",
+            ),
+            (
+                [
+                    "status",
+                    "training",
+                    "--manifest",
+                    "/plan.json",
+                    "--staging-receipt",
+                    "/staging.json",
+                    "--preflight-receipt",
+                    "/preflight.json",
+                    "--submission-receipt",
+                    "/submission.json",
+                    "--output",
+                    "/receipt.json",
+                ],
+                cli.training_launch,
+                "describe_training_job_status",
+            ),
+            (
+                [
+                    "verify",
+                    "training",
+                    "--manifest",
+                    "/plan.json",
+                    "--staging-receipt",
+                    "/staging.json",
+                    "--preflight-receipt",
+                    "/preflight.json",
+                    "--submission-receipt",
+                    "/submission.json",
+                    "--output",
+                    "/receipt.json",
+                ],
+                cli.training_launch,
+                "verify_terminal_training_job",
+            ),
+        ]
+        for arguments, module, function_name in fixtures:
+            with self.subTest(command=arguments[:2]):
+                order: list[str] = []
+
+                def absent(_path: Path) -> None:
+                    order.append("absent")
+
+                def remote(*_args: object, **_kwargs: object) -> dict[str, object]:
+                    order.append("remote")
+                    return {"schema_version": 1, "succeeded": True}
+
+                with (
+                    patch.object(cli, "_require_absent_output", side_effect=absent),
+                    patch.object(cli, "_load_training_plan", return_value=plan),
+                    patch.object(
+                        cli, "_load_receipt", return_value={"schema_version": 1}
+                    ),
+                    patch.object(cli.aws, "make_clients", return_value=clients),
+                    patch.object(module, function_name, side_effect=remote) as operation,
+                    patch.object(cli, "_publish_json") as publish,
+                ):
+                    self.assertEqual(cli.main(arguments), 0)
+                self.assertEqual(order, ["absent", "remote"])
+                operation.assert_called_once()
+                publish.assert_called_once()
+
+    def test_existing_training_submit_output_prevents_client_construction(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "submission.json"
+            output.write_bytes(b"occupied")
+            with patch.object(cli.aws, "make_clients") as make_clients:
+                with self.assertRaisesRegex(FileExistsError, "overwrite"):
+                    cli.main(
+                        [
+                            "submit",
+                            "training",
+                            "--manifest",
+                            "/plan.json",
+                            "--staging-receipt",
+                            "/staging.json",
+                            "--preflight-receipt",
+                            "/preflight.json",
+                            "--receipt-output",
+                            str(output),
+                        ]
+                    )
+            make_clients.assert_not_called()
+
+    def test_training_verify_publishes_failure_evidence_then_fails_loudly(
+        self,
+    ) -> None:
+        plan = {"infrastructure": {"region": "us-east-1"}}
+        terminal = {
+            "schema_version": 1,
+            "succeeded": False,
+            "terminal_status": "Failed",
+        }
+        arguments = [
+            "verify",
+            "training",
+            "--manifest",
+            "/plan.json",
+            "--staging-receipt",
+            "/staging.json",
+            "--preflight-receipt",
+            "/preflight.json",
+            "--submission-receipt",
+            "/submission.json",
+            "--output",
+            "/terminal.json",
+        ]
+        with (
+            patch.object(cli, "_require_absent_output"),
+            patch.object(cli, "_load_training_plan", return_value=plan),
+            patch.object(cli, "_load_receipt", return_value={"schema_version": 1}),
+            patch.object(cli.aws, "make_clients", return_value=Mock()),
+            patch.object(
+                cli.training_launch,
+                "verify_terminal_training_job",
+                return_value=terminal,
+            ),
+            patch.object(cli, "_publish_json") as publish,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Failed"):
+                cli.main(arguments)
+        publish.assert_called_once_with(Path("/terminal.json"), terminal)
 
 
 if __name__ == "__main__":

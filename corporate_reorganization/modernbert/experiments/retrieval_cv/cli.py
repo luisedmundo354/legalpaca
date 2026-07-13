@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import Any, Sequence
 
-from . import aggregate, aws, config, folds, manifest
+from . import aggregate, aws, config, folds, manifest, training_aws, training_launch
 
 
 def _absolute(path: Path, *, name: str) -> Path:
@@ -94,6 +94,16 @@ def _parser() -> argparse.ArgumentParser:
     freeze_manifest.add_argument("--source-bundle-output", type=Path, required=True)
     freeze_manifest.add_argument("--manifest-output", type=Path, required=True)
 
+    stage = commands.add_parser("stage", allow_abbrev=False)
+    stage_modes = stage.add_subparsers(dest="stage_mode", required=True)
+    training_inputs = stage_modes.add_parser("training-inputs", allow_abbrev=False)
+    training_inputs.add_argument("--manifest", type=Path, required=True)
+    training_inputs.add_argument("--source-bundle", type=Path, required=True)
+    training_inputs.add_argument("--dataset-dir", type=Path, required=True)
+    training_inputs.add_argument("--base-model-dir", type=Path, required=True)
+    training_inputs.add_argument("--snapshot-manifest", type=Path, required=True)
+    training_inputs.add_argument("--receipt-output", type=Path, required=True)
+
     preflight = commands.add_parser("preflight", allow_abbrev=False)
     preflight_modes = preflight.add_subparsers(dest="preflight_mode", required=True)
     runtime_preflight = preflight_modes.add_parser("runtime-smoke", allow_abbrev=False)
@@ -101,12 +111,22 @@ def _parser() -> argparse.ArgumentParser:
     runtime_preflight.add_argument("--image-uri", required=True)
     runtime_preflight.add_argument("--job-name", required=True)
     runtime_preflight.add_argument("--receipt-output", type=Path, required=True)
+    training_preflight = preflight_modes.add_parser("training", allow_abbrev=False)
+    training_preflight.add_argument("--manifest", type=Path, required=True)
+    training_preflight.add_argument("--staging-receipt", type=Path, required=True)
+    training_preflight.add_argument("--run-id", required=True)
+    training_preflight.add_argument("--receipt-output", type=Path, required=True)
 
     submit = commands.add_parser("submit", allow_abbrev=False)
     submit_modes = submit.add_subparsers(dest="submit_mode", required=True)
     runtime_submit = submit_modes.add_parser("runtime-smoke", allow_abbrev=False)
     runtime_submit.add_argument("--preflight-receipt", type=Path, required=True)
     runtime_submit.add_argument("--receipt-output", type=Path, required=True)
+    training_submit = submit_modes.add_parser("training", allow_abbrev=False)
+    training_submit.add_argument("--manifest", type=Path, required=True)
+    training_submit.add_argument("--staging-receipt", type=Path, required=True)
+    training_submit.add_argument("--preflight-receipt", type=Path, required=True)
+    training_submit.add_argument("--receipt-output", type=Path, required=True)
 
     status = commands.add_parser("status", allow_abbrev=False)
     status_modes = status.add_subparsers(dest="status_mode", required=True)
@@ -114,6 +134,12 @@ def _parser() -> argparse.ArgumentParser:
     runtime_status.add_argument("--job-name", required=True)
     runtime_status.add_argument("--region", choices=("us-east-1",), required=True)
     runtime_status.add_argument("--output", type=Path, required=True)
+    training_status = status_modes.add_parser("training", allow_abbrev=False)
+    training_status.add_argument("--manifest", type=Path, required=True)
+    training_status.add_argument("--staging-receipt", type=Path, required=True)
+    training_status.add_argument("--preflight-receipt", type=Path, required=True)
+    training_status.add_argument("--submission-receipt", type=Path, required=True)
+    training_status.add_argument("--output", type=Path, required=True)
 
     evaluate = commands.add_parser("evaluate", allow_abbrev=False)
     evaluate_modes = evaluate.add_subparsers(dest="evaluate_mode", required=True)
@@ -136,6 +162,12 @@ def _parser() -> argparse.ArgumentParser:
     verify_manifest = verify_modes.add_parser("training-plan", allow_abbrev=False)
     verify_manifest.add_argument("--manifest", type=Path, required=True)
     verify_manifest.add_argument("--output", type=Path, required=True)
+    verify_training = verify_modes.add_parser("training", allow_abbrev=False)
+    verify_training.add_argument("--manifest", type=Path, required=True)
+    verify_training.add_argument("--staging-receipt", type=Path, required=True)
+    verify_training.add_argument("--preflight-receipt", type=Path, required=True)
+    verify_training.add_argument("--submission-receipt", type=Path, required=True)
+    verify_training.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -145,6 +177,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def _load_receipt(path: Path) -> dict[str, Any]:
     value, _ = config.load_canonical_json_object(_absolute(path, name="receipt"))
+    return value
+
+
+def _load_training_plan(path: Path) -> dict[str, Any]:
+    value, _ = manifest.read_manifest(_absolute(path, name="manifest"))
     return value
 
 
@@ -269,6 +306,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                     os.close(descriptor)
             raise
         return 0
+    if args.command == "stage" and args.stage_mode == "training-inputs":
+        output = _absolute(args.receipt_output, name="receipt-output")
+        _require_absent_output(output)
+        plan = _load_training_plan(args.manifest)
+        clients = aws.make_clients(region=plan["infrastructure"]["region"])
+        receipt = training_aws.stage_training_inputs_once(
+            clients.s3,
+            training_plan=plan,
+            source_bundle_path=_absolute(args.source_bundle, name="source-bundle"),
+            dataset_dir=_absolute(args.dataset_dir, name="dataset-dir"),
+            base_model_dir=_absolute(args.base_model_dir, name="base-model-dir"),
+            snapshot_manifest_path=_absolute(
+                args.snapshot_manifest, name="snapshot-manifest"
+            ),
+        )
+        _publish_json(output, receipt)
+        return 0
     if args.command == "preflight" and args.preflight_mode == "runtime-smoke":
         output = _absolute(args.receipt_output, name="receipt-output")
         _require_absent_output(output)
@@ -281,6 +335,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             aws_config,
             remote_image_uri=args.image_uri,
             job_name=args.job_name,
+        )
+        _publish_json(output, receipt)
+        return 0
+    if args.command == "preflight" and args.preflight_mode == "training":
+        output = _absolute(args.receipt_output, name="receipt-output")
+        _require_absent_output(output)
+        plan = _load_training_plan(args.manifest)
+        staging = _load_receipt(args.staging_receipt)
+        clients = aws.make_clients(region=plan["infrastructure"]["region"])
+        receipt = training_launch.preflight_training_job(
+            clients,
+            training_plan=plan,
+            staging_receipt=staging,
+            run_id=args.run_id,
         )
         _publish_json(output, receipt)
         return 0
@@ -298,6 +366,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         _publish_json(output, submission)
         return 0
+    if args.command == "submit" and args.submit_mode == "training":
+        output = _absolute(args.receipt_output, name="receipt-output")
+        _require_absent_output(output)
+        plan = _load_training_plan(args.manifest)
+        staging = _load_receipt(args.staging_receipt)
+        preflight = _load_receipt(args.preflight_receipt)
+        clients = aws.make_clients(region=plan["infrastructure"]["region"])
+        submission = training_launch.submit_training_job_once(
+            clients,
+            training_plan=plan,
+            staging_receipt=staging,
+            preflight_receipt=preflight,
+        )
+        _publish_json(output, submission)
+        return 0
     if args.command == "status" and args.status_mode == "runtime-smoke":
         output = _absolute(args.output, name="output")
         _require_absent_output(output)
@@ -306,6 +389,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             output,
             aws.describe_runtime_smoke(clients.sagemaker, job_name=args.job_name),
         )
+        return 0
+    if args.command == "status" and args.status_mode == "training":
+        output = _absolute(args.output, name="output")
+        _require_absent_output(output)
+        plan = _load_training_plan(args.manifest)
+        staging = _load_receipt(args.staging_receipt)
+        preflight = _load_receipt(args.preflight_receipt)
+        submission = _load_receipt(args.submission_receipt)
+        clients = aws.make_clients(region=plan["infrastructure"]["region"])
+        status = training_launch.describe_training_job_status(
+            clients,
+            training_plan=plan,
+            staging_receipt=staging,
+            preflight_receipt=preflight,
+            submission_receipt=submission,
+        )
+        _publish_json(output, status)
         return 0
     if args.command == "evaluate" and args.evaluate_mode == "runtime-smoke":
         output = _absolute(args.output, name="output")
@@ -354,6 +454,28 @@ def main(argv: Sequence[str] | None = None) -> int:
                 + len(value["auxiliary_runs"]),
             },
         )
+        return 0
+    if args.command == "verify" and args.verify_mode == "training":
+        output = _absolute(args.output, name="output")
+        _require_absent_output(output)
+        plan = _load_training_plan(args.manifest)
+        staging = _load_receipt(args.staging_receipt)
+        preflight = _load_receipt(args.preflight_receipt)
+        submission = _load_receipt(args.submission_receipt)
+        clients = aws.make_clients(region=plan["infrastructure"]["region"])
+        terminal = training_launch.verify_terminal_training_job(
+            clients,
+            training_plan=plan,
+            staging_receipt=staging,
+            preflight_receipt=preflight,
+            submission_receipt=submission,
+        )
+        _publish_json(output, terminal)
+        if terminal["succeeded"] is not True:
+            raise RuntimeError(
+                "Training job ended unsuccessfully: "
+                f"{terminal['terminal_status']}"
+            )
         return 0
     raise ValueError(f"Unsupported command/mode: {args}")
 
