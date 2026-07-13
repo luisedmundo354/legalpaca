@@ -240,6 +240,7 @@ class TrainingLaunchTest(unittest.TestCase):
                 "StoppingCondition",
             )
         }
+        response["OutputDataConfig"]["KmsKeyId"] = ""
         created = datetime(2026, 7, 13, 12, 0, tzinfo=timezone.utc)
         response.update(
             {
@@ -747,7 +748,14 @@ class TrainingLaunchTest(unittest.TestCase):
         clients.sagemaker.list_tags.assert_not_called()
 
     def test_post_create_describe_mutations_fail_loudly(self) -> None:
-        mutations = ("request", "arn", "retry", "tags")
+        mutations = (
+            "request",
+            "output-kms",
+            "output-extra",
+            "arn",
+            "retry",
+            "tags",
+        )
         with self._remote_dependencies():
             for mutation in mutations:
                 with self.subTest(mutation=mutation):
@@ -757,6 +765,12 @@ class TrainingLaunchTest(unittest.TestCase):
                     described = self._describe_response(preflight)
                     if mutation == "request":
                         described["ResourceConfig"]["VolumeSizeInGB"] += 1
+                    elif mutation == "output-kms":
+                        described["OutputDataConfig"]["KmsKeyId"] = (
+                            "alias/unexpected"
+                        )
+                    elif mutation == "output-extra":
+                        described["OutputDataConfig"]["Unexpected"] = ""
                     elif mutation == "arn":
                         described["TrainingJobArn"] += "-wrong"
                     elif mutation == "retry":

@@ -335,6 +335,10 @@ The collision check treats the documented `ResourceNotFound` response and the
 exact live SageMaker response `ValidationException: Requested resource not
 found.` as absence; every other validation, authorization, transport, or
 malformed error fails unchanged.
+For immediate and terminal request readback, SageMaker may echo an omitted
+output `KmsKeyId` as the empty string that denotes its default S3 key. The
+verifier removes only that exact empty service-default field before comparison;
+a nonempty KMS key or any other added, omitted, or changed field still fails.
 
 The immediate Processing smoke is
 `evaluation_image_runtime_smoke_v1`. It validates account-local digest pull,

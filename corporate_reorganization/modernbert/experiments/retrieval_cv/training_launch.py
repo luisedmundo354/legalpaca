@@ -752,8 +752,17 @@ def _snapshot_from_remote(
     for field in _REQUEST_ECHO_FIELDS:
         if field not in response:
             raise ValueError(f"DescribeTrainingJob omitted request field {field}")
-        _require_plain_json(response[field], name=f"DescribeTrainingJob.{field}")
-        if aws.canonical_json_bytes(response[field]) != aws.canonical_json_bytes(
+        described_value = response[field]
+        _require_plain_json(described_value, name=f"DescribeTrainingJob.{field}")
+        if (
+            field == "OutputDataConfig"
+            and type(described_value) is dict
+            and "KmsKeyId" not in request[field]
+            and described_value.get("KmsKeyId") == ""
+        ):
+            described_value = copy.deepcopy(described_value)
+            del described_value["KmsKeyId"]
+        if aws.canonical_json_bytes(described_value) != aws.canonical_json_bytes(
             request[field]
         ):
             raise ValueError(f"DescribeTrainingJob changed request field {field}")
