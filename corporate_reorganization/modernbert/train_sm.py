@@ -38,6 +38,9 @@ DEFAULT_EXPERIMENT_CONFIG = SOURCE_DIR / "experiments/retrieval_cv/configs/exper
 DEFAULT_FOLDS_CONFIG = SOURCE_DIR / "experiments/retrieval_cv/configs/folds.json"
 DEFAULT_SNAPSHOT_MANIFEST = SOURCE_DIR / "experiments/retrieval_cv/configs/modernbert_snapshot.json"
 DEFAULT_DEEPSPEED_CONFIG = SOURCE_DIR / "ds_zero3.json"
+DEFAULT_CORRECTED_LEGACY_CONFIG = (
+    SOURCE_DIR / "experiments/retrieval_cv/configs/corrected_legacy.json"
+)
 
 CONTROLLED_QUERY_VIEWS = ("structured", "flat_masked")
 CONTROLLED_SAMPLERS = (SAMPLER_LOCAL_UNIQUE, SAMPLER_GLOBAL_UNIFORM)
@@ -48,6 +51,7 @@ EXPECTED_MODEL_SELECTION_SECONDARY = (
 )
 CONTROLLED_FULL_RUN_KIND = "controlled_full"
 DETERMINISM_SMOKE_RUN_KIND = "determinism_smoke"
+CORRECTED_LEGACY_DIAGNOSTIC_RUN_KIND = "corrected_legacy_diagnostic"
 DETERMINISM_SMOKE_MODEL_ARTIFACT_PROTOCOL = (
     "determinism_smoke_selected_bf16_safetensors_v1"
 )
@@ -84,13 +88,23 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--experiment-config", type=Path, default=DEFAULT_EXPERIMENT_CONFIG)
     parser.add_argument("--snapshot-manifest", type=Path, default=DEFAULT_SNAPSHOT_MANIFEST)
     parser.add_argument("--deepspeed-config", type=Path, default=DEFAULT_DEEPSPEED_CONFIG)
-    parser.add_argument("--outer-fold", type=int, choices=range(5), required=True)
+    parser.add_argument(
+        "--corrected-legacy-config",
+        type=Path,
+        default=DEFAULT_CORRECTED_LEGACY_CONFIG,
+    )
+    parser.add_argument("--outer-fold", type=int, choices=range(5))
     parser.add_argument("--query-view", choices=CONTROLLED_QUERY_VIEWS, required=True)
-    parser.add_argument("--sampler", choices=CONTROLLED_SAMPLERS, required=True)
-    parser.add_argument("--experiment-seed", type=int, choices=CONTROLLED_SEEDS, required=True)
+    parser.add_argument("--sampler", choices=CONTROLLED_SAMPLERS)
+    parser.add_argument("--experiment-seed", type=int, choices=CONTROLLED_SEEDS)
+    parser.add_argument("--base-seed", type=int, choices=(17,))
     parser.add_argument(
         "--run-kind",
-        choices=(CONTROLLED_FULL_RUN_KIND, DETERMINISM_SMOKE_RUN_KIND),
+        choices=(
+            CONTROLLED_FULL_RUN_KIND,
+            DETERMINISM_SMOKE_RUN_KIND,
+            CORRECTED_LEGACY_DIAGNOSTIC_RUN_KIND,
+        ),
         default=CONTROLLED_FULL_RUN_KIND,
     )
     parser.add_argument("--epochs", type=int)
@@ -103,6 +117,22 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                 f"--{field.replace('_', '-')} is required, either explicitly or through its exact "
                 "SageMaker channel/output environment variable"
             )
+    if args.run_kind in (CONTROLLED_FULL_RUN_KIND, DETERMINISM_SMOKE_RUN_KIND):
+        missing = [
+            option
+            for option, value in (
+                ("--outer-fold", args.outer_fold),
+                ("--sampler", args.sampler),
+                ("--experiment-seed", args.experiment_seed),
+            )
+            if value is None
+        ]
+        if missing:
+            parser.error(
+                f"{args.run_kind} requires controlled coordinates: {', '.join(missing)}"
+            )
+        if args.base_seed is not None:
+            parser.error(f"{args.run_kind} forbids --base-seed")
     if args.run_kind == CONTROLLED_FULL_RUN_KIND:
         if args.epochs is not None or args.total_optimizer_updates is not None:
             parser.error(
@@ -110,7 +140,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             )
         args.epochs = 20
         args.total_optimizer_updates = 60
-    else:
+    elif args.run_kind == DETERMINISM_SMOKE_RUN_KIND:
         if args.epochs != 2 or args.total_optimizer_updates != 6:
             parser.error(
                 "determinism_smoke requires exactly --epochs 2 "
@@ -125,6 +155,22 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             parser.error(
                 "determinism_smoke is sealed to fold 0, structured, "
                 "global_uniform, seed 17"
+            )
+    else:
+        if any(
+            value is not None
+            for value in (args.outer_fold, args.sampler, args.experiment_seed)
+        ):
+            parser.error(
+                "corrected_legacy_diagnostic forbids --outer-fold, --sampler, "
+                "and --experiment-seed"
+            )
+        if args.base_seed != 17:
+            parser.error("corrected_legacy_diagnostic requires exactly --base-seed 17")
+        if args.epochs != 20 or args.total_optimizer_updates != 80:
+            parser.error(
+                "corrected_legacy_diagnostic requires exactly --epochs 20 "
+                "--total-optimizer-updates 80"
             )
     return args
 
@@ -883,9 +929,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         experiment_config_path=args.experiment_config,
         deepspeed_config_path=args.deepspeed_config,
     )
-    validate_preimport_environment(args.experiment_seed)
+    execution_seed = (
+        args.base_seed
+        if args.run_kind == CORRECTED_LEGACY_DIAGNOSTIC_RUN_KIND
+        else args.experiment_seed
+    )
+    validate_preimport_environment(execution_seed)
     training_launch_provenance = validate_training_image_environment()
     validate_runtime_versions()
+
+    if args.run_kind == CORRECTED_LEGACY_DIAGNOSTIC_RUN_KIND:
+        from corrected_legacy_train import run_corrected_legacy_diagnostic
+
+        return run_corrected_legacy_diagnostic(
+            args,
+            training_launch_provenance=training_launch_provenance,
+        )
 
     import numpy
     import torch

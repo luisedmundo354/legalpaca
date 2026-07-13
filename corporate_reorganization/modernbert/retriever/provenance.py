@@ -331,6 +331,23 @@ def validate_training_image_environment() -> dict[str, Any]:
     staging_sha256 = os.environ.get("ARR_TRAINING_STAGING_RECEIPT_SHA256")
     if not _is_sha256(plan_sha256) or not _is_sha256(staging_sha256):
         raise RuntimeError("Training plan/staging receipt identity is not lowercase SHA-256")
+    optional_request = {
+        "training_request_payload_sha256": os.environ.get(
+            "ARR_TRAINING_REQUEST_PAYLOAD_SHA256"
+        ),
+        "training_run_id": os.environ.get("ARR_TRAINING_RUN_ID"),
+    }
+    if any(value is not None for value in optional_request.values()):
+        if (
+            not _is_sha256(optional_request["training_request_payload_sha256"])
+            or optional_request["training_run_id"]
+            not in ("corrected-legacy-flat", "corrected-legacy-structured")
+        ):
+            raise RuntimeError(
+                "Optional corrected-legacy request/run provenance is incomplete or invalid"
+            )
+    else:
+        optional_request = {}
     return {
         "bootstrap_protocol": EXPECTED_TRAINING_BOOTSTRAP_PROTOCOL,
         "source_bundle": {
@@ -345,6 +362,7 @@ def validate_training_image_environment() -> dict[str, Any]:
         ),
         "training_plan_sha256": plan_sha256,
         "training_staging_receipt_sha256": staging_sha256,
+        **optional_request,
     }
 
 

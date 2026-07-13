@@ -82,10 +82,14 @@ def valid_scientific_config() -> dict[str, object]:
                 {}, "controlled_retriever", "controlled_retrieval_artifact_v1"
             ),
             "legacy": _template(
-                {"base_seed": 17},
-                "legacy_retriever",
-                "legacy_replication_artifact_v1",
-                entry_point="legacy_train_sm.py",
+                {
+                    "base_seed": 17,
+                    "epochs": 20,
+                    "run_kind": "corrected_legacy_diagnostic",
+                    "total_optimizer_updates": 80,
+                },
+                "corrected_legacy_diagnostic_retriever",
+                "corrected_legacy_diagnostic_artifact_v1",
             ),
             "determinism_smoke": _template(
                 {
@@ -134,7 +138,7 @@ class CanonicalConfigTest(unittest.TestCase):
         tracked, digest = config.load_scientific_config(path)
         self.assertEqual(
             digest,
-            "dc410bd8cf0e707644bd21097a7ebd719cec875d706ef1790d114ae39e2427b0",
+            "0178ea6c175f3bb6ee2239a89d34d5cee701a9a10a2057888b62c229d877205a",
         )
         self.assertEqual(
             tracked["study"]["training_image_digest"],
@@ -211,6 +215,15 @@ class CanonicalConfigTest(unittest.TestCase):
         ] = 20
         with self.assertRaisesRegex(ValueError, "exactly two epochs"):
             config.validate_scientific_config(wrong_smoke)
+
+        wrong_corrected_legacy = valid_scientific_config()
+        wrong_corrected_legacy["run_templates"]["legacy"]["hyperparameters"][
+            "total_optimizer_updates"
+        ] = 60
+        with self.assertRaisesRegex(
+            ValueError, "Corrected legacy diagnostic template hyperparameters changed"
+        ):
+            config.validate_scientific_config(wrong_corrected_legacy)
 
         hashseed = valid_scientific_config()
         hashseed["run_templates"]["controlled"]["environment"][

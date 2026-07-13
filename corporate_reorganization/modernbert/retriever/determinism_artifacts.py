@@ -689,7 +689,11 @@ def _frame(digest: Any, value: bytes) -> None:
     digest.update(value)
 
 
-def _canonical_bf16_safetensors_identity(path: Path) -> dict[str, Any]:
+def _canonical_bf16_safetensors_identity(
+    path: Path,
+    *,
+    expected_metadata: Mapping[str, str] = _EXPECTED_SAFETENSORS_METADATA,
+) -> dict[str, Any]:
     """Recompute the canonical tensor-state identity without Torch/safetensors imports."""
 
     if not path.is_file() or path.is_symlink() or path.stat().st_size < 9:
@@ -703,8 +707,13 @@ def _canonical_bf16_safetensors_identity(path: Path) -> dict[str, Any]:
         header = json.loads(header_raw.rstrip(b" "))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError("Safetensors header is not valid JSON") from error
-    if type(header) is not dict or header.get("__metadata__") != _EXPECTED_SAFETENSORS_METADATA:
-        raise ValueError("Safetensors metadata changed from the smoke publication contract")
+    if type(expected_metadata) is not dict or any(
+        type(key) is not str or type(value) is not str
+        for key, value in expected_metadata.items()
+    ):
+        raise TypeError("Expected safetensors metadata must be one exact string mapping")
+    if type(header) is not dict or header.get("__metadata__") != expected_metadata:
+        raise ValueError("Safetensors metadata changed from the expected publication contract")
     tensors = {key: value for key, value in header.items() if key != "__metadata__"}
     if set(tensors) != set(_EXPECTED_MODEL_TENSOR_SHAPES):
         missing = sorted(set(_EXPECTED_MODEL_TENSOR_SHAPES) - set(tensors))

@@ -460,6 +460,226 @@ class ControlledTrainingRequestTest(unittest.TestCase):
         self.assertEqual(rendered["experiment-seed"], "17")
 
 
+class CorrectedLegacyTrainingRequestTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.plan, _ = _training_plan(self.root)
+        self.staging = _staging_receipt(self.plan)
+        self.runs = self.plan["auxiliary_runs"][:2]
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def test_exact_toolkit_mapping_and_train_sm_parser_roundtrip(self) -> None:
+        expected_views = ("flat_masked", "structured")
+        for run, query_view in zip(self.runs, expected_views):
+            with self.subTest(run_id=run["run_id"]):
+                rendered = (
+                    training_aws.render_corrected_legacy_toolkit_hyperparameters(
+                        job_name=run["job_name"],
+                        region=REGION,
+                        logical_hyperparameters=run["hyperparameters"],
+                    )
+                )
+                self.assertEqual(
+                    rendered,
+                    {
+                        "base-seed": "17",
+                        "epochs": "20",
+                        "query-view": f'"{query_view}"',
+                        "run-kind": '"corrected_legacy_diagnostic"',
+                        "sagemaker_container_log_level": "20",
+                        "sagemaker_job_name": f'"{run["job_name"]}"',
+                        "sagemaker_mpi_enabled": "true",
+                        "sagemaker_mpi_num_of_processes_per_host": "4",
+                        "sagemaker_program": '"bootstrap.py"',
+                        "sagemaker_region": '"us-east-1"',
+                        "sagemaker_submit_directory": '"/opt/training_bootstrap"',
+                        "total-optimizer-updates": "80",
+                    },
+                )
+                arguments = training_aws.toolkit_user_command_arguments(rendered)
+                self.assertEqual(
+                    arguments,
+                    [
+                        "--base-seed",
+                        "17",
+                        "--epochs",
+                        "20",
+                        "--query-view",
+                        query_view,
+                        "--run-kind",
+                        "corrected_legacy_diagnostic",
+                        "--total-optimizer-updates",
+                        "80",
+                    ],
+                )
+                with patch.dict(
+                    os.environ,
+                    {
+                        "SM_CHANNEL_BASE_MODEL": "/opt/ml/input/data/base_model",
+                        "SM_CHANNEL_DATA": "/opt/ml/input/data/data",
+                        "SM_MODEL_DIR": "/opt/ml/model",
+                    },
+                    clear=True,
+                ):
+                    parsed = controlled_entrypoint.parse_args(arguments)
+                self.assertEqual(parsed.base_seed, 17)
+                self.assertEqual(parsed.epochs, 20)
+                self.assertEqual(parsed.query_view, query_view)
+                self.assertEqual(parsed.run_kind, "corrected_legacy_diagnostic")
+                self.assertEqual(parsed.total_optimizer_updates, 80)
+                self.assertIsNone(parsed.experiment_seed)
+                self.assertIsNone(parsed.outer_fold)
+                self.assertIsNone(parsed.sampler)
+
+    def test_two_exact_non_submitting_requests_and_receipts(self) -> None:
+        expected_job_names = (
+            "arr-ret-cv1-corrected-legacy-flat-a1",
+            "arr-ret-cv1-corrected-legacy-structured-a1",
+        )
+        for run, job_name in zip(self.runs, expected_job_names):
+            with self.subTest(run_id=run["run_id"]):
+                request = training_aws.render_corrected_legacy_training_request(
+                    training_plan=self.plan,
+                    run_id=run["run_id"],
+                    staging_receipt=self.staging,
+                )
+                matching_controlled = next(
+                    candidate
+                    for candidate in self.plan["controlled_runs"]
+                    if candidate["cell"]
+                    == {
+                        "outer_fold": 0,
+                        "query_view": run["cell"]["query_view"],
+                        "sampler": "local_unique",
+                        "experiment_seed": 17,
+                    }
+                )
+                expected = training_aws.render_controlled_training_request(
+                    training_plan=self.plan,
+                    run_id=matching_controlled["run_id"],
+                    staging_receipt=self.staging,
+                )
+                expected["HyperParameters"] = (
+                    training_aws.render_corrected_legacy_toolkit_hyperparameters(
+                        job_name=run["job_name"],
+                        region=REGION,
+                        logical_hyperparameters=run["hyperparameters"],
+                    )
+                )
+                expected["OutputDataConfig"]["S3OutputPath"] = run["output_prefix"]
+                expected["TrainingJobName"] = run["job_name"]
+                expected["Environment"]["ARR_TRAINING_RUN_ID"] = run["run_id"]
+                expected_request_payload_sha256 = aws.sha256_bytes(
+                    aws.canonical_json_bytes(expected)
+                )
+                expected["Environment"][
+                    "ARR_TRAINING_REQUEST_PAYLOAD_SHA256"
+                ] = expected_request_payload_sha256
+                self.assertEqual(request, expected)
+                self.assertEqual(request["TrainingJobName"], job_name)
+                self.assertEqual(
+                    request["OutputDataConfig"]["S3OutputPath"],
+                    run["output_prefix"],
+                )
+                self.assertEqual(
+                    [row["ChannelName"] for row in request["InputDataConfig"]],
+                    ["base_model", "data", "source"],
+                )
+                self.assertTrue(request["EnableNetworkIsolation"])
+                self.assertFalse(request["EnableManagedSpotTraining"])
+                self.assertEqual(request["Environment"]["PYTHONHASHSEED"], "17")
+                self.assertEqual(
+                    request["Environment"]["ARR_TRAINING_REQUEST_PAYLOAD_SHA256"],
+                    expected_request_payload_sha256,
+                )
+
+                receipt = (
+                    training_aws.build_corrected_legacy_training_request_receipt(
+                        training_plan=self.plan,
+                        run_id=run["run_id"],
+                        staging_receipt=self.staging,
+                    )
+                )
+                self.assertEqual(
+                    receipt["protocol"],
+                    training_aws.CORRECTED_LEGACY_REQUEST_PROTOCOL,
+                )
+                self.assertEqual(
+                    training_aws.validate_corrected_legacy_training_request_receipt(
+                        receipt,
+                        training_plan=self.plan,
+                        staging_receipt=self.staging,
+                    ),
+                    receipt,
+                )
+
+    def test_identity_schedule_schema_and_rerender_attacks_fail(self) -> None:
+        for run_id in (
+            self.plan["controlled_runs"][0]["run_id"],
+            "determinism-smoke-a",
+            "corrected-legacy-missing",
+        ):
+            with self.subTest(run_id=run_id):
+                with self.assertRaisesRegex(
+                    ValueError, "(?i)corrected-legacy auxiliary"
+                ):
+                    training_aws.render_corrected_legacy_training_request(
+                        training_plan=self.plan,
+                        run_id=run_id,
+                        staging_receipt=self.staging,
+                    )
+
+        logical = copy.deepcopy(self.runs[0]["hyperparameters"])
+        malformed = []
+        for field, replacement in (
+            ("base_seed", True),
+            ("epochs", 20.0),
+            ("query_view", "flat"),
+            ("run_kind", "controlled_full"),
+            ("total_optimizer_updates", 60),
+        ):
+            changed = copy.deepcopy(logical)
+            changed[field] = replacement
+            malformed.append(changed)
+        malformed.extend(
+            [
+                {**logical, "outer_fold": 0},
+                {key: value for key, value in logical.items() if key != "epochs"},
+            ]
+        )
+        for changed in malformed:
+            with self.subTest(logical=changed):
+                with self.assertRaises((TypeError, ValueError)):
+                    training_aws.validate_corrected_legacy_logical_hyperparameters(
+                        changed
+                    )
+
+        receipt = training_aws.build_corrected_legacy_training_request_receipt(
+            training_plan=self.plan,
+            run_id=self.runs[0]["run_id"],
+            staging_receipt=self.staging,
+        )
+        for field, replacement in (
+            ("EnableNetworkIsolation", 1),
+            ("EnableManagedSpotTraining", True),
+        ):
+            attack = copy.deepcopy(receipt)
+            attack["request"][field] = replacement
+            attack["request_sha256"] = aws.sha256_bytes(
+                aws.canonical_json_bytes(attack["request"])
+            )
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(ValueError, "re-rendering"):
+                    training_aws.validate_corrected_legacy_training_request_receipt(
+                        attack,
+                        training_plan=self.plan,
+                        staging_receipt=self.staging,
+                    )
+
+
 class DeterminismSmokeTrainingRequestTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()

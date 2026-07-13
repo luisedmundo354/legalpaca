@@ -166,6 +166,56 @@ def _validate_exact_dataset_inventory(
     return manifest
 
 
+def validate_staged_dataset(
+    *,
+    dataset_dir: Path,
+    expected_dataset_manifest_sha256: str,
+) -> dict[str, Any]:
+    """Bind every staged corrected-v2 file to one exact dataset manifest."""
+
+    dataset_dir = Path(dataset_dir)
+    expected_manifest_hash = _require_sha256(
+        expected_dataset_manifest_sha256,
+        name="expected_dataset_manifest_sha256",
+    )
+    if dataset_dir.is_symlink() or not dataset_dir.is_dir():
+        raise ValueError(f"Staged dataset must be a real directory: {dataset_dir}")
+    manifest_path = dataset_dir / "dataset_manifest.json"
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        raise ValueError(f"Staged dataset manifest must be a regular file: {manifest_path}")
+    actual_manifest_hash = _sha256_file(manifest_path)
+    if actual_manifest_hash != expected_manifest_hash:
+        raise ValueError(
+            "Frozen dataset-manifest SHA-256 changed: "
+            f"actual={actual_manifest_hash}, expected={expected_manifest_hash}"
+        )
+    manifest = _load_pretty_json_object(
+        manifest_path,
+        name="Staged dataset manifest",
+    )
+    output_records = manifest.get("output_files")
+    if type(output_records) is not dict or set(output_records) != _DATASET_OUTPUT_PATHS:
+        raise ValueError("Staged dataset output manifest inventory changed")
+    output_sha256: dict[str, str] = {}
+    for relative_path in sorted(_DATASET_OUTPUT_PATHS):
+        record = output_records[relative_path]
+        if type(record) is not dict:
+            raise ValueError(
+                f"Staged dataset manifest record changed for {relative_path}"
+            )
+        output_sha256[relative_path] = _require_sha256(
+            record.get("sha256"),
+            name=f"dataset output {relative_path}",
+        )
+    validated = _validate_exact_dataset_inventory(
+        dataset_dir,
+        output_sha256=output_sha256,
+    )
+    if validated != manifest:
+        raise RuntimeError("Staged dataset manifest changed during exact validation")
+    return manifest
+
+
 def _validate_fold_roles(manifest: Mapping[str, Any]) -> None:
     folds = manifest.get("folds")
     rotations = manifest.get("rotations")

@@ -458,11 +458,11 @@ def validate_scientific_config(value: object) -> dict[str, Any]:
             },
         },
         "legacy": {
-            "entry_point": "legacy_train_sm.py",
+            "entry_point": "train_sm.py",
             "artifact": {
-                "artifact_type": "legacy_retriever",
+                "artifact_type": "corrected_legacy_diagnostic_retriever",
                 "schema_version": 1,
-                "validator_version": "legacy_replication_artifact_v1",
+                "validator_version": "corrected_legacy_diagnostic_artifact_v1",
             },
         },
         "determinism_smoke": {
@@ -523,13 +523,19 @@ def validate_scientific_config(value: object) -> dict[str, Any]:
         raise ValueError("Smoke template must not pre-bind generated cell parameters")
     if "query_view" in templates["legacy"]["hyperparameters"]:
         raise ValueError("Legacy template must not pre-bind generated query_view")
-    legacy_seed = templates["legacy"]["hyperparameters"].get("base_seed")
+    legacy_parameters = templates["legacy"]["hyperparameters"]
+    legacy_seed = legacy_parameters.get("base_seed")
     if type(legacy_seed) is not int or legacy_seed < 0:
         raise TypeError("Legacy template must bind non-negative exact integer base_seed")
     if controlled_parameters != {}:
         raise ValueError("Controlled template hyperparameters changed")
-    if templates["legacy"]["hyperparameters"] != {"base_seed": 17}:
-        raise ValueError("Legacy template hyperparameters changed")
+    if legacy_parameters != {
+        "base_seed": 17,
+        "epochs": 20,
+        "run_kind": "corrected_legacy_diagnostic",
+        "total_optimizer_updates": 80,
+    }:
+        raise ValueError("Corrected legacy diagnostic template hyperparameters changed")
     if smoke_parameters.get("run_kind") != "determinism_smoke":
         raise ValueError("Smoke template run_kind must be 'determinism_smoke'")
     if type(smoke_parameters.get("epochs")) is not int or smoke_parameters["epochs"] != 2:

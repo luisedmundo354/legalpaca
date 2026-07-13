@@ -252,6 +252,40 @@ class DryManifestTest(unittest.TestCase):
                     manifest.SMOKE_KIND,
                 ],
             )
+            self.assertEqual(
+                [run["run_id"] for run in auxiliary[:2]],
+                ["corrected-legacy-flat", "corrected-legacy-structured"],
+            )
+            self.assertEqual(
+                [run["job_name"] for run in auxiliary[:2]],
+                [
+                    "arr-ret-cv1-corrected-legacy-flat-a1",
+                    "arr-ret-cv1-corrected-legacy-structured-a1",
+                ],
+            )
+            self.assertEqual(
+                auxiliary[0]["hyperparameters"],
+                {
+                    "base_seed": 17,
+                    "epochs": 20,
+                    "query_view": "flat_masked",
+                    "run_kind": "corrected_legacy_diagnostic",
+                    "total_optimizer_updates": 80,
+                },
+            )
+            self.assertEqual(
+                [run["entry_point"] for run in auxiliary[:2]],
+                ["train_sm.py", "train_sm.py"],
+            )
+            expected_corrected_artifact = {
+                "artifact_type": "corrected_legacy_diagnostic_retriever",
+                "schema_version": 1,
+                "validator_version": "corrected_legacy_diagnostic_artifact_v1",
+            }
+            self.assertEqual(
+                [run["expected_artifact_identity"] for run in auxiliary[:2]],
+                [expected_corrected_artifact, expected_corrected_artifact],
+            )
             for field in ("run_id", "job_name", "output_prefix"):
                 values = [run[field] for run in [*controlled, *auxiliary]]
                 self.assertEqual(len(values), len(set(values)))
@@ -312,6 +346,15 @@ class DryManifestTest(unittest.TestCase):
                 run["hyperparameters"]["epochs"] = 20
             with self.assertRaisesRegex(ValueError, "exactly two smoke epochs"):
                 manifest.validate_dry_manifest(invalid_schedule)
+
+            invalid_corrected_legacy = copy.deepcopy(dry)
+            invalid_corrected_legacy["auxiliary_runs"][0]["hyperparameters"][
+                "total_optimizer_updates"
+            ] = 60
+            with self.assertRaisesRegex(
+                ValueError, "corrected legacy diagnostic hyperparameters changed"
+            ):
+                manifest.validate_dry_manifest(invalid_corrected_legacy)
 
             falsely_submittable = copy.deepcopy(dry)
             falsely_submittable["execution"] = {

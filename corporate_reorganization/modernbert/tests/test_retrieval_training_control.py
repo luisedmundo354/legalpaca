@@ -275,6 +275,25 @@ class ProvenanceValidationTest(unittest.TestCase):
                     with mock.patch.dict(os.environ, changed, clear=True):
                         with self.assertRaises(RuntimeError):
                             validate_training_image_environment()
+        corrected = {
+            **exact,
+            "ARR_TRAINING_REQUEST_PAYLOAD_SHA256": "e" * 64,
+            "ARR_TRAINING_RUN_ID": "corrected-legacy-structured",
+        }
+        with mock.patch.dict(os.environ, corrected, clear=True):
+            identity = validate_training_image_environment()
+        self.assertEqual(identity["training_request_payload_sha256"], "e" * 64)
+        self.assertEqual(identity["training_run_id"], "corrected-legacy-structured")
+        for key in (
+            "ARR_TRAINING_REQUEST_PAYLOAD_SHA256",
+            "ARR_TRAINING_RUN_ID",
+        ):
+            with self.subTest(optional_corrected_key=key):
+                incomplete = dict(corrected)
+                incomplete.pop(key)
+                with mock.patch.dict(os.environ, incomplete, clear=True):
+                    with self.assertRaisesRegex(RuntimeError, "request/run provenance"):
+                        validate_training_image_environment()
 
     def test_frozen_snapshot_manifest_is_canonical_and_exact(self) -> None:
         manifest = load_snapshot_manifest(SNAPSHOT_MANIFEST)
@@ -428,6 +447,47 @@ class StrictEntrypointTest(unittest.TestCase):
             controlled_train.parse_args(
                 self.valid_cli() + ["--epochs", "20", "--total-optimizer-updates", "60"]
             )
+
+    def test_cli_seals_corrected_legacy_diagnostic_coordinates(self) -> None:
+        argv = [
+            "--data-dir",
+            "/data",
+            "--base-model-dir",
+            "/model",
+            "--output-dir",
+            "/output",
+            "--query-view",
+            "flat_masked",
+            "--base-seed",
+            "17",
+            "--run-kind",
+            "corrected_legacy_diagnostic",
+            "--epochs",
+            "20",
+            "--total-optimizer-updates",
+            "80",
+        ]
+        args = controlled_train.parse_args(argv)
+        self.assertEqual(args.run_kind, "corrected_legacy_diagnostic")
+        self.assertEqual(args.base_seed, 17)
+        self.assertEqual(args.query_view, "flat_masked")
+        self.assertIsNone(args.outer_fold)
+        self.assertIsNone(args.sampler)
+        self.assertIsNone(args.experiment_seed)
+        self.assertEqual((args.epochs, args.total_optimizer_updates), (20, 80))
+
+        invalid = (
+            argv[: argv.index("--base-seed")] + argv[argv.index("--base-seed") + 2 :],
+            argv[:-1] + ["79"],
+            argv + ["--outer-fold", "0"],
+            argv + ["--sampler", "local_unique"],
+            argv + ["--experiment-seed", "17"],
+        )
+        for changed in invalid:
+            with self.subTest(argv=changed), redirect_stderr(
+                io.StringIO()
+            ), self.assertRaises(SystemExit):
+                controlled_train.parse_args(changed)
 
     def test_frozen_experiment_and_deepspeed_configs_validate(self) -> None:
         controlled_train._validate_frozen_control_file_hashes(

@@ -27,6 +27,9 @@ CONTROLLED_REQUEST_PROTOCOL = "retrieval_cv_controlled_training_request_v1"
 DETERMINISM_SMOKE_REQUEST_PROTOCOL = (
     "retrieval_cv_determinism_smoke_training_request_v1"
 )
+CORRECTED_LEGACY_REQUEST_PROTOCOL = (
+    "retrieval_cv_corrected_legacy_diagnostic_training_request_v1"
+)
 DETERMINISM_SMOKE_EQUIVALENCE_PROTOCOL = (
     "retrieval_cv_determinism_smoke_request_equivalence_v1"
 )
@@ -81,6 +84,19 @@ DETERMINISM_SMOKE_LOGICAL_HYPERPARAMETERS = {
     "run_kind": manifest.SMOKE_KIND,
     "sampler": "global_uniform",
     "total_optimizer_updates": 6,
+}
+CORRECTED_LEGACY_LOGICAL_TO_CLI = {
+    "base_seed": "base-seed",
+    "epochs": "epochs",
+    "query_view": "query-view",
+    "run_kind": "run-kind",
+    "total_optimizer_updates": "total-optimizer-updates",
+}
+CORRECTED_LEGACY_FIXED_LOGICAL_HYPERPARAMETERS = {
+    "base_seed": 17,
+    "epochs": 20,
+    "run_kind": manifest.LEGACY_KIND,
+    "total_optimizer_updates": 80,
 }
 CONTROLLED_QUERY_VIEWS = {"flat_masked", "structured"}
 CONTROLLED_SAMPLERS = {"global_uniform", "local_unique"}
@@ -316,6 +332,30 @@ def validate_determinism_smoke_logical_hyperparameters(
     return copy.deepcopy(logical)
 
 
+def validate_corrected_legacy_logical_hyperparameters(
+    value: object,
+) -> dict[str, Any]:
+    """Validate one exact corrected-legacy diagnostic schedule."""
+
+    logical = _exact_keys(
+        value,
+        set(CORRECTED_LEGACY_LOGICAL_TO_CLI),
+        name="corrected-legacy logical hyperparameters",
+    )
+    for name, expected in CORRECTED_LEGACY_FIXED_LOGICAL_HYPERPARAMETERS.items():
+        actual = logical[name]
+        if type(actual) is not type(expected) or actual != expected:
+            raise ValueError(
+                "Corrected-legacy logical hyperparameter changed: "
+                f"{name}={actual!r}, expected={expected!r}"
+            )
+    if type(logical["query_view"]) is not str or (
+        logical["query_view"] not in CONTROLLED_QUERY_VIEWS
+    ):
+        raise ValueError("Corrected-legacy query_view changed")
+    return copy.deepcopy(logical)
+
+
 def _render_exact_toolkit_hyperparameters(
     *,
     job_name: str,
@@ -399,6 +439,25 @@ def render_determinism_smoke_toolkit_hyperparameters(
     )
 
 
+def render_corrected_legacy_toolkit_hyperparameters(
+    *,
+    job_name: str,
+    region: str,
+    logical_hyperparameters: Mapping[str, Any],
+) -> dict[str, str]:
+    """Render exact pinned-toolkit strings for one corrected diagnostic."""
+
+    logical = validate_corrected_legacy_logical_hyperparameters(
+        dict(logical_hyperparameters)
+    )
+    return _render_exact_toolkit_hyperparameters(
+        job_name=job_name,
+        region=region,
+        logical=logical,
+        logical_to_cli=CORRECTED_LEGACY_LOGICAL_TO_CLI,
+    )
+
+
 def toolkit_user_command_arguments(
     hyperparameters: Mapping[str, str],
 ) -> list[str]:
@@ -412,12 +471,17 @@ def toolkit_user_command_arguments(
         *DETERMINISM_SMOKE_LOGICAL_TO_CLI.values(),
         *_RESERVED_HYPERPARAMETERS,
     }
+    corrected_legacy_keys = {
+        *CORRECTED_LEGACY_LOGICAL_TO_CLI.values(),
+        *_RESERVED_HYPERPARAMETERS,
+    }
     actual_keys = (
         frozenset(hyperparameters) if type(hyperparameters) is dict else frozenset()
     )
     if type(hyperparameters) is not dict or actual_keys not in {
         frozenset(controlled_keys),
         frozenset(smoke_keys),
+        frozenset(corrected_legacy_keys),
     }:
         raise ValueError("Rendered training hyperparameter schema changed")
     decoded: dict[str, object] = {}
@@ -452,18 +516,19 @@ def toolkit_user_command_arguments(
         or decoded["sagemaker_submit_directory"] != BOOTSTRAP_SUBMIT_DIRECTORY
     ):
         raise ValueError("Pinned toolkit job/source hyperparameters changed")
-    user_decoded = {
-        key: decoded[cli_name]
-        for key, cli_name in (
-            CONTROLLED_LOGICAL_TO_CLI.items()
-            if actual_keys == frozenset(controlled_keys)
-            else DETERMINISM_SMOKE_LOGICAL_TO_CLI.items()
-        )
-    }
     if actual_keys == frozenset(controlled_keys):
-        validate_controlled_logical_hyperparameters(user_decoded)
+        logical_to_cli = CONTROLLED_LOGICAL_TO_CLI
+        logical_validator = validate_controlled_logical_hyperparameters
+    elif actual_keys == frozenset(smoke_keys):
+        logical_to_cli = DETERMINISM_SMOKE_LOGICAL_TO_CLI
+        logical_validator = validate_determinism_smoke_logical_hyperparameters
     else:
-        validate_determinism_smoke_logical_hyperparameters(user_decoded)
+        logical_to_cli = CORRECTED_LEGACY_LOGICAL_TO_CLI
+        logical_validator = validate_corrected_legacy_logical_hyperparameters
+    user_decoded = {
+        key: decoded[cli_name] for key, cli_name in logical_to_cli.items()
+    }
+    logical_validator(user_decoded)
     arguments: list[str] = []
     for key in sorted(set(decoded) - _RESERVED_HYPERPARAMETERS):
         arguments.extend((f"--{key}", str(decoded[key])))
@@ -1069,6 +1134,46 @@ def _find_determinism_smoke_run(
     return run
 
 
+def _find_corrected_legacy_run(
+    plan: Mapping[str, Any], run_id: str
+) -> dict[str, Any]:
+    if type(run_id) is not str or not run_id:
+        raise ValueError("run_id must be one non-empty string")
+    matches = [
+        run for run in plan["auxiliary_runs"] if run.get("run_id") == run_id
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            "run_id does not select exactly one corrected-legacy auxiliary run"
+        )
+    run = matches[0]
+    expected_view_by_run = {
+        "corrected-legacy-flat": "flat_masked",
+        "corrected-legacy-structured": "structured",
+    }
+    query_view = expected_view_by_run.get(run_id)
+    if (
+        query_view is None
+        or run.get("kind") != manifest.LEGACY_KIND
+        or run.get("entry_point") != "train_sm.py"
+        or run.get("cell") != {"query_view": query_view}
+        or run.get("expected_artifact_identity")
+        != {
+            "artifact_type": "corrected_legacy_diagnostic_retriever",
+            "schema_version": 1,
+            "validator_version": "corrected_legacy_diagnostic_artifact_v1",
+        }
+        or run.get("launch_metadata") != {"replica_id": None}
+    ):
+        raise ValueError("Corrected-legacy auxiliary run identity changed")
+    logical = validate_corrected_legacy_logical_hyperparameters(
+        run.get("hyperparameters")
+    )
+    if logical["query_view"] != query_view:
+        raise ValueError("Corrected-legacy run query_view changed")
+    return run
+
+
 def render_controlled_training_request(
     *,
     training_plan: Mapping[str, Any],
@@ -1298,6 +1403,124 @@ def render_determinism_smoke_training_request(
     }
 
 
+def render_corrected_legacy_training_request(
+    *,
+    training_plan: Mapping[str, Any],
+    run_id: str,
+    staging_receipt: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Render one exact, non-submitting corrected-legacy diagnostic request."""
+
+    plan = _validated_training_plan(training_plan)
+    staged = validate_training_staging_receipt(
+        dict(staging_receipt), training_plan=plan
+    )
+    run = _find_corrected_legacy_run(plan, run_id)
+    logical = validate_corrected_legacy_logical_hyperparameters(
+        run["hyperparameters"]
+    )
+    expected_scientific_channels = {
+        name: run["input_channels"][name]["s3_uri"]
+        for name in ("base_model", "data")
+    }
+    expected_staged_channels = {
+        name: expected_scientific_channels[name] + "/"
+        for name in ("base_model", "data")
+    }
+    expected_staged_channels["source"] = _s3_uri(
+        plan["infrastructure"]["artifact_bucket"], staged["prefixes"]["source"]
+    )
+    if staged["channels"] != expected_staged_channels:
+        raise ValueError("Corrected-legacy channels differ from staged inputs")
+    image_uri = plan["study"]["training_image_uri"]
+    if (
+        image_uri != TRAINING_IMAGE_URI
+        or image_uri.rsplit("@", 1)[1] != TRAINING_IMAGE_DIGEST
+        or plan["study"]["training_image_inventory_sha256"]
+        != TRAINING_IMAGE_RUNTIME_INVENTORY_SHA256
+        or plan["study"]["training_base_image_uri"] != BASE_TRAINING_IMAGE_URI
+    ):
+        raise ValueError("Corrected-legacy training image provenance changed")
+    hyperparameters = render_corrected_legacy_toolkit_hyperparameters(
+        job_name=run["job_name"],
+        region=plan["infrastructure"]["region"],
+        logical_hyperparameters=logical,
+    )
+    user_arguments = toolkit_user_command_arguments(hyperparameters)
+    expected_user_arguments = []
+    for key in sorted(CORRECTED_LEGACY_LOGICAL_TO_CLI.values()):
+        expected_user_arguments.extend(
+            (f"--{key}", str(json.loads(hyperparameters[key])))
+        )
+    if user_arguments != expected_user_arguments:
+        raise RuntimeError("Corrected-legacy scientific user argv changed")
+    environment = copy.deepcopy(run["environment"])
+    if environment["PYTHONHASHSEED"] != str(logical["base_seed"]):
+        raise ValueError("Corrected-legacy PYTHONHASHSEED differs from base_seed")
+    environment.update(
+        {
+            "ARR_TRAINING_BASE_IMAGE_URI": BASE_TRAINING_IMAGE_URI,
+            "ARR_TRAINING_IMAGE_RUNTIME_INVENTORY_SHA256": (
+                TRAINING_IMAGE_RUNTIME_INVENTORY_SHA256
+            ),
+            "ARR_TRAINING_IMAGE_URI": image_uri,
+            "ARR_SOURCE_BUNDLE_NAME": plan["sources"]["source_bundle_path"],
+            "ARR_SOURCE_BUNDLE_SHA256": plan["sources"]["source_bundle_sha256"],
+            "ARR_SOURCE_BUNDLE_SIZE": str(plan["sources"]["source_bundle_size"]),
+            "ARR_SOURCE_COMMIT_EPOCH": str(plan["sources"]["commit_epoch"]),
+            "ARR_SOURCE_INVENTORY_SHA256": plan["sources"][
+                "source_inventory_sha256"
+            ],
+            "ARR_TRAINING_PLAN_SHA256": _plan_sha256(plan),
+            "ARR_TRAINING_RUN_ID": run_id,
+            "ARR_TRAINING_STAGING_RECEIPT_SHA256": aws.sha256_bytes(
+                aws.canonical_json_bytes(staged)
+            ),
+        }
+    )
+    infrastructure = plan["infrastructure"]
+    tags = [
+        {"Key": key, "Value": TRAINING_TAGS[key]}
+        for key in sorted(TRAINING_TAGS)
+    ]
+    request = {
+        "AlgorithmSpecification": {
+            "EnableSageMakerMetricsTimeSeries": False,
+            "TrainingImage": image_uri,
+            "TrainingInputMode": "File",
+        },
+        "EnableManagedSpotTraining": False,
+        "EnableNetworkIsolation": True,
+        "Environment": environment,
+        "HyperParameters": hyperparameters,
+        "InputDataConfig": [
+            _training_channel("base_model", expected_staged_channels["base_model"]),
+            _training_channel("data", expected_staged_channels["data"]),
+            _training_channel("source", expected_staged_channels["source"]),
+        ],
+        "OutputDataConfig": {
+            "CompressionType": "GZIP",
+            "S3OutputPath": run["output_prefix"],
+        },
+        "ResourceConfig": {
+            "InstanceCount": infrastructure["training_instance_count"],
+            "InstanceType": infrastructure["training_instance_type"],
+            "VolumeSizeInGB": infrastructure["training_volume_size_gb"],
+        },
+        "RoleArn": infrastructure["role_arn"],
+        "StoppingCondition": {
+            "MaxRuntimeInSeconds": infrastructure["training_max_runtime_seconds"]
+        },
+        "Tags": tags,
+        "TrainingJobName": run["job_name"],
+    }
+    request_payload_sha256 = aws.sha256_bytes(aws.canonical_json_bytes(request))
+    request["Environment"]["ARR_TRAINING_REQUEST_PAYLOAD_SHA256"] = (
+        request_payload_sha256
+    )
+    return request
+
+
 def build_controlled_training_request_receipt(
     *,
     training_plan: Mapping[str, Any],
@@ -1426,6 +1649,71 @@ def validate_determinism_smoke_training_request_receipt(
     return copy.deepcopy(receipt)
 
 
+def build_corrected_legacy_training_request_receipt(
+    *,
+    training_plan: Mapping[str, Any],
+    run_id: str,
+    staging_receipt: Mapping[str, Any],
+) -> dict[str, Any]:
+    plan = _validated_training_plan(training_plan)
+    staged = validate_training_staging_receipt(
+        dict(staging_receipt), training_plan=plan
+    )
+    request = render_corrected_legacy_training_request(
+        training_plan=plan,
+        run_id=run_id,
+        staging_receipt=staged,
+    )
+    return {
+        "plan_sha256": _plan_sha256(plan),
+        "protocol": CORRECTED_LEGACY_REQUEST_PROTOCOL,
+        "request": request,
+        "request_sha256": aws.sha256_bytes(aws.canonical_json_bytes(request)),
+        "run_id": run_id,
+        "schema_version": 1,
+        "staging_receipt_sha256": aws.sha256_bytes(
+            aws.canonical_json_bytes(staged)
+        ),
+        "toolkit_provenance": {
+            "mapping_py_sha256": TRAINING_TOOLKIT_MAPPING_SHA256,
+            "sagemaker_training_version": TRAINING_TOOLKIT_VERSION,
+        },
+    }
+
+
+def validate_corrected_legacy_training_request_receipt(
+    value: object,
+    *,
+    training_plan: Mapping[str, Any],
+    staging_receipt: Mapping[str, Any],
+) -> dict[str, Any]:
+    _require_plain_json(value, name="corrected-legacy training request receipt")
+    receipt = _exact_keys(
+        value,
+        {
+            "plan_sha256",
+            "protocol",
+            "request",
+            "request_sha256",
+            "run_id",
+            "schema_version",
+            "staging_receipt_sha256",
+            "toolkit_provenance",
+        },
+        name="corrected-legacy training request receipt",
+    )
+    expected = build_corrected_legacy_training_request_receipt(
+        training_plan=training_plan,
+        run_id=receipt["run_id"],
+        staging_receipt=staging_receipt,
+    )
+    if aws.canonical_json_bytes(receipt) != aws.canonical_json_bytes(expected):
+        raise ValueError(
+            "Corrected-legacy training request receipt differs from re-rendering"
+        )
+    return copy.deepcopy(receipt)
+
+
 def _normalized_determinism_smoke_request(
     request: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -1512,6 +1800,7 @@ def validate_determinism_smoke_request_equivalence(
 __all__: Sequence[str] = (
     "BASE_TRAINING_IMAGE_URI",
     "CONTROLLED_REQUEST_PROTOCOL",
+    "CORRECTED_LEGACY_REQUEST_PROTOCOL",
     "DETERMINISM_SMOKE_EQUIVALENCE_PROTOCOL",
     "DETERMINISM_SMOKE_REQUEST_PROTOCOL",
     "TRAINING_IMAGE_DIGEST",
@@ -1520,8 +1809,11 @@ __all__: Sequence[str] = (
     "TRAINING_TOOLKIT_MAPPING_SHA256",
     "TRAINING_TOOLKIT_VERSION",
     "build_controlled_training_request_receipt",
+    "build_corrected_legacy_training_request_receipt",
     "build_determinism_smoke_training_request_receipt",
     "render_controlled_training_request",
+    "render_corrected_legacy_toolkit_hyperparameters",
+    "render_corrected_legacy_training_request",
     "render_determinism_smoke_toolkit_hyperparameters",
     "render_determinism_smoke_training_request",
     "render_toolkit_hyperparameters",
@@ -1529,6 +1821,8 @@ __all__: Sequence[str] = (
     "toolkit_user_command_arguments",
     "validate_controlled_logical_hyperparameters",
     "validate_controlled_training_request_receipt",
+    "validate_corrected_legacy_logical_hyperparameters",
+    "validate_corrected_legacy_training_request_receipt",
     "validate_determinism_smoke_logical_hyperparameters",
     "validate_determinism_smoke_request_equivalence",
     "validate_determinism_smoke_training_request_receipt",

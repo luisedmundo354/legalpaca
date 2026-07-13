@@ -24,13 +24,10 @@ from . import config as strict_config
 MANIFEST_SCHEMA_VERSION = 1
 MANIFEST_TYPE = "retrieval_cv_training_plan"
 CONTROLLED_KIND = "controlled_full"
-LEGACY_KIND = "legacy_configuration_replication"
+LEGACY_KIND = "corrected_legacy_diagnostic"
 SMOKE_KIND = "determinism_smoke"
 EXECUTION_BLOCKERS = (
-    "controlled_training_image_provenance_not_implemented",
-    "determinism_smoke_entry_point_not_implemented",
-    "legacy_replication_adapter_not_implemented",
-    "sagemaker_hyperparameter_rendering_not_implemented",
+    "step_10d_scientific_source_freeze_required",
 )
 EXPECTED_BUNDLER_RUNTIME = {
     "python": "3.11.13",
@@ -38,10 +35,15 @@ EXPECTED_BUNDLER_RUNTIME = {
     "zlib_runtime": "1.2.13",
 }
 EXPECTED_SOURCE_INCLUDES = (
+    "corrected_legacy_train.py",
     "ds_zero3.json",
+    "experiments/retrieval_cv/configs/corrected_legacy.json",
+    "experiments/retrieval_cv/configs/corrected_legacy_membership",
     "experiments/retrieval_cv/configs/experiment.json",
     "experiments/retrieval_cv/configs/folds.json",
     "experiments/retrieval_cv/configs/modernbert_snapshot.json",
+    "experiments/retrieval_cv/corrected_legacy_config.py",
+    "legacy_diagnostic_trainer.py",
     "legacy_eval",
     "legacy_train_sm.py",
     "retriever",
@@ -777,7 +779,16 @@ def _validate_study(value: object) -> dict[str, Any]:
         },
         "run_templates": {
             "controlled": _dummy_template("controlled", {}, value),
-            "legacy": _dummy_template("legacy", {"base_seed": 17}, value),
+            "legacy": _dummy_template(
+                "legacy",
+                {
+                    "base_seed": 17,
+                    "epochs": 20,
+                    "run_kind": LEGACY_KIND,
+                    "total_optimizer_updates": 80,
+                },
+                value,
+            ),
             "determinism_smoke": _dummy_template(
                 "determinism_smoke",
                 {
@@ -805,9 +816,9 @@ def _dummy_template(
             "controlled_retrieval_artifact_v1",
         ),
         "legacy": (
-            "legacy_train_sm.py",
-            "legacy_retriever",
-            "legacy_replication_artifact_v1",
+            "train_sm.py",
+            "corrected_legacy_diagnostic_retriever",
+            "corrected_legacy_diagnostic_artifact_v1",
         ),
         "determinism_smoke": (
             "train_sm.py",
@@ -1069,13 +1080,13 @@ def build_dry_manifest(
     legacy_template = scientific["run_templates"]["legacy"]
     legacy_seed = legacy_template["hyperparameters"]["base_seed"]
     for view in strict_config.CONTROLLED_QUERY_VIEWS:
-        view_alias = _VIEW_ALIAS[view]
-        run_id = f"legacy-{view_alias}"
+        view_alias = "flat" if view == "flat_masked" else "structured"
+        run_id = f"corrected-legacy-{view_alias}"
         run = _base_run(
             run_id=run_id,
             kind=LEGACY_KIND,
             cell={"query_view": view},
-            job_name=f"arr-ret-cv1-legacy-{view_alias}-{attempt_id}",
+            job_name=f"arr-ret-cv1-corrected-legacy-{view_alias}-{attempt_id}",
             template=legacy_template,
             source_bundle_sha256=source_digest,
             output_prefix=_output_prefix(infrastructure, attempt_id, run_id),
@@ -1287,11 +1298,11 @@ def _validate_plan_run_contract(
             },
         ),
         LEGACY_KIND: (
-            "legacy_train_sm.py",
+            "train_sm.py",
             {
-                "artifact_type": "legacy_retriever",
+                "artifact_type": "corrected_legacy_diagnostic_retriever",
                 "schema_version": 1,
-                "validator_version": "legacy_replication_artifact_v1",
+                "validator_version": "corrected_legacy_diagnostic_artifact_v1",
             },
         ),
         SMOKE_KIND: (
@@ -1423,8 +1434,20 @@ def validate_dry_manifest(value: object) -> dict[str, Any]:
     if type(auxiliary) is not list or len(auxiliary) != 4:
         raise ValueError("Launch manifest must contain exactly four auxiliary runs")
     expected_auxiliary = (
-        (LEGACY_KIND, "legacy-flat", "arr-ret-cv1-legacy-flat", {"query_view": "flat_masked"}, None),
-        (LEGACY_KIND, "legacy-struct", "arr-ret-cv1-legacy-struct", {"query_view": "structured"}, None),
+        (
+            LEGACY_KIND,
+            "corrected-legacy-flat",
+            "arr-ret-cv1-corrected-legacy-flat",
+            {"query_view": "flat_masked"},
+            None,
+        ),
+        (
+            LEGACY_KIND,
+            "corrected-legacy-structured",
+            "arr-ret-cv1-corrected-legacy-structured",
+            {"query_view": "structured"},
+            None,
+        ),
         (
             SMOKE_KIND,
             "determinism-smoke-a",
@@ -1502,17 +1525,26 @@ def validate_dry_manifest(value: object) -> dict[str, Any]:
                 raise ValueError(f"{name} smoke hyperparameters contain an unplanned key")
         else:
             if run["hyperparameters"].get("query_view") != cell["query_view"]:
-                raise ValueError(f"{name} legacy query_view differs from its cell")
+                raise ValueError(
+                    f"{name} corrected legacy diagnostic query_view differs from its cell"
+                )
             base_seed = run["hyperparameters"].get("base_seed")
             if type(base_seed) is not int or base_seed < 0:
                 raise ValueError(f"{name} must bind a non-negative exact base_seed")
             if run["environment"]["PYTHONHASHSEED"] != str(base_seed):
-                raise ValueError(f"{name} PYTHONHASHSEED differs from legacy base_seed")
+                raise ValueError(
+                    f"{name} PYTHONHASHSEED differs from corrected legacy base_seed"
+                )
             if run["hyperparameters"] != {
                 "base_seed": 17,
+                "epochs": 20,
                 "query_view": cell["query_view"],
+                "run_kind": LEGACY_KIND,
+                "total_optimizer_updates": 80,
             }:
-                raise ValueError(f"{name} legacy hyperparameters changed")
+                raise ValueError(
+                    f"{name} corrected legacy diagnostic hyperparameters changed"
+                )
 
     if _container_identity(validated_auxiliary[2]) != _container_identity(
         validated_auxiliary[3]
