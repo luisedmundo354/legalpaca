@@ -248,9 +248,10 @@ Step-2-frozen experiment specification.
   content-derived tag.
 - folds.py is the only fold generator and validator.
 - configs/orchestration.json binds the verified evaluation image, the derived
-  training image and its distinct base DLC, the exact Step-8 source parent,
+  training image and its distinct base DLC, the exact Step-10C scientific
+  source commit/tree/epoch,
   immutable inputs, and planned templates for the 60 controlled runs, two
-  legacy attempts, and two determinism smokes.
+  corrected legacy-style diagnostics, and two determinism smokes.
 - configs/evaluation_runtime_identity.json is the compact canonical identity
   emitted by the verified evaluation image under the exact Processing request
   environment. CloudWatch verification requires its SHA-256
@@ -266,10 +267,11 @@ Step-2-frozen experiment specification.
   and five ModernBERT snapshot files under previously unused versioned
   prefixes; records every VersionId, ETag, size, SHA-256, and SSE setting; and
   rejects delete markers, extra versions, or non-current objects. It renders a
-  controlled CreateTrainingJob request or one of the two sealed determinism
-  smoke requests only from a validated plan cell and the matching staging
-  receipt. The smoke renderer proves replicas A and B differ only in job name,
-  output prefix, and the toolkit's duplicated job-name field. The pinned
+  controlled CreateTrainingJob request, either corrected legacy-style
+  diagnostic request, or one of the two sealed determinism-smoke requests only
+  from a validated plan cell and the matching staging receipt. The smoke
+  renderer proves replicas A and B differ only in job name, output prefix, and
+  the toolkit's duplicated job-name field. The pinned
   training-toolkit 5.0.0 mapping is explicit: scientific snake_case plan keys
   become the hyphenated strict CLI flags consumed by the image-baked bootstrap
   and then by train_sm.py. The
@@ -299,18 +301,15 @@ Step-2-frozen experiment specification.
   readback. Statistical aggregation, intervals, contrasts, and figures remain
   Step 12.
 
-The committed Step-9 training manifest is deliberately
+The training manifest is deliberately
 `retrieval_cv_training_plan`, not a launch manifest. It is hard-blocked and
-cannot be submitted. This implementation commit adds derived/base/runtime
-image provenance to controlled artifacts and the exact controlled request and
-staging renderer and the strict 2-epoch/6-update determinism path, but it
-intentionally does not make the old plan submittable: the corrected-data
-legacy-style diagnostic still needs its own strict entry point, artifact
-protocol, and request schema. After that implementation is committed, a later
-source-freeze commit must repin the source commit/tree, rebuild the plan, clear
-only genuinely discharged blockers, and add remote
-preflight/re-render/Describe verification before any submission is exposed.
-These are explicit implementation gates, not implicit behavior or fallbacks.
+cannot be submitted. The scientific source claim is frozen to the exact
+Step-10C commit containing the controlled, corrected-diagnostic, and strict
+2-epoch/6-update determinism paths. The only remaining plan blocker is the
+absent remote training coordinator: it must implement preflight, exact request
+re-rendering, one-shot submission, and Describe/readback verification before
+any submission is exposed. This is an explicit implementation gate, not
+implicit behavior or a fallback.
 The immediate Processing runtime smoke is independent of this blocked plan.
 The training staging coordinator has not been invoked. Before training, its
 single operation validates the bucket, proves all three complete versioned

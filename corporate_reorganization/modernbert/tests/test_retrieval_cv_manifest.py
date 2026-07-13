@@ -221,7 +221,9 @@ class DryManifestTest(unittest.TestCase):
             self.assertEqual(
                 dry["execution"],
                 {
-                    "blockers": list(manifest.EXECUTION_BLOCKERS),
+                    "blockers": [
+                        "remote_training_preflight_and_submission_not_implemented"
+                    ],
                     "status": "blocked",
                     "submittable": False,
                 },

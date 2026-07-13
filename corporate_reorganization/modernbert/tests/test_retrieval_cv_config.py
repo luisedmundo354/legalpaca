@@ -138,7 +138,18 @@ class CanonicalConfigTest(unittest.TestCase):
         tracked, digest = config.load_scientific_config(path)
         self.assertEqual(
             digest,
-            "0178ea6c175f3bb6ee2239a89d34d5cee701a9a10a2057888b62c229d877205a",
+            "b34608f30a5f1c77ba3b2d074f1e69a7922df56ffb8cd01a74112840ec8c7187",
+        )
+        self.assertEqual(
+            {
+                key: tracked["sources"][key]
+                for key in ("git_commit", "git_tree", "commit_epoch")
+            },
+            {
+                "git_commit": "6bbde30dac849d750caba4c3f350c8d52c6a4dd2",
+                "git_tree": "2e425028d1a2e0316f1c0b8234f4b56cad9d0fe0",
+                "commit_epoch": 1783917519,
+            },
         )
         self.assertEqual(
             tracked["study"]["training_image_digest"],

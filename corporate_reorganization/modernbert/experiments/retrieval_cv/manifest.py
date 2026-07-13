@@ -27,7 +27,7 @@ CONTROLLED_KIND = "controlled_full"
 LEGACY_KIND = "corrected_legacy_diagnostic"
 SMOKE_KIND = "determinism_smoke"
 EXECUTION_BLOCKERS = (
-    "step_10d_scientific_source_freeze_required",
+    "remote_training_preflight_and_submission_not_implemented",
 )
 EXPECTED_BUNDLER_RUNTIME = {
     "python": "3.11.13",
