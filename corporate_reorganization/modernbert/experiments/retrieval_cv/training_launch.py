@@ -416,8 +416,16 @@ def _assert_unused_job_name(sagemaker: object, *, job_name: str) -> None:
     try:
         sagemaker.describe_training_job(TrainingJobName=job_name)
     except ClientError as error:
-        code = error.response.get("Error", {}).get("Code")
+        error_body = error.response.get("Error")
+        if type(error_body) is not dict:
+            raise
+        code = error_body.get("Code")
         if code == "ResourceNotFound":
+            return
+        if (
+            code == "ValidationException"
+            and error_body.get("Message") == "Requested resource not found."
+        ):
             return
         raise
     raise FileExistsError(f"Training job name is already used: {job_name}")

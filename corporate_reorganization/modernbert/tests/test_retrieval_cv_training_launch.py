@@ -46,6 +46,18 @@ def _client_error(code: str) -> ClientError:
     )
 
 
+def _live_missing_training_job_error() -> ClientError:
+    return ClientError(
+        {
+            "Error": {
+                "Code": "ValidationException",
+                "Message": "Requested resource not found.",
+            }
+        },
+        "DescribeTrainingJob",
+    )
+
+
 class TrainingLaunchTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -463,13 +475,30 @@ class TrainingLaunchTest(unittest.TestCase):
                 self._preflight(clients)
         clients.sagemaker.create_training_job.assert_not_called()
 
-    def test_only_resource_not_found_means_unused_job_name(self) -> None:
+    def test_only_documented_or_exact_live_not_found_means_unused_job_name(self) -> None:
         with self._remote_dependencies():
+            clients = self._clients()
+            clients.sagemaker.describe_training_job.side_effect = (
+                _live_missing_training_job_error()
+            )
+            receipt = self._preflight(clients)
+            self.assertEqual(receipt["run_id"], self.run_id)
+            clients.sagemaker.create_training_job.assert_not_called()
+
             for side_effect in (
                 _client_error("AccessDeniedException"),
                 _client_error("ValidationException"),
+                ClientError(
+                    {
+                        "Error": {
+                            "Code": "ValidationException",
+                            "Message": "Requested resource not found",
+                        }
+                    },
+                    "DescribeTrainingJob",
+                ),
             ):
-                with self.subTest(code=side_effect.response["Error"]["Code"]):
+                with self.subTest(error=side_effect.response["Error"]):
                     clients = self._clients()
                     clients.sagemaker.describe_training_job.side_effect = side_effect
                     with self.assertRaises(ClientError):

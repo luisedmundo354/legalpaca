@@ -331,6 +331,10 @@ re-lists complete version history and deeply re-reads the named versions.
 partial staging failure permanently taints that prefix and fails; it is never
 cleaned up or retried in place. An ambiguous CreateTrainingJob response also
 fails without an automatic retry because that API has no idempotency token.
+The collision check treats the documented `ResourceNotFound` response and the
+exact live SageMaker response `ValidationException: Requested resource not
+found.` as absence; every other validation, authorization, transport, or
+malformed error fails unchanged.
 
 The immediate Processing smoke is
 `evaluation_image_runtime_smoke_v1`. It validates account-local digest pull,
