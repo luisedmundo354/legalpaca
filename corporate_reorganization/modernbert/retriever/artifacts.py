@@ -20,7 +20,11 @@ from .provenance import (
     EXPECTED_RUNTIME_VERSIONS,
     EXPECTED_SNAPSHOT_MANIFEST_SHA256,
     EXPECTED_SNAPSHOT_TREE_SHA256,
-    EXPECTED_TRAINING_IMAGE,
+    EXPECTED_BASE_TRAINING_IMAGE,
+    EXPECTED_DERIVED_TRAINING_IMAGE,
+    EXPECTED_DERIVED_TRAINING_IMAGE_CONTRACT_SHA256,
+    EXPECTED_DERIVED_TRAINING_IMAGE_RUNTIME_INVENTORY_SHA256,
+    EXPECTED_TRAINING_BOOTSTRAP_PROTOCOL,
     EXPECTED_TRAIN_QUERY_IDS_SHA256_BY_OUTER_FOLD,
     EXPECTED_VALIDATION_IDENTITY_BY_CELL,
 )
@@ -66,6 +70,13 @@ _CONTROLLED_RUN_KEYS = frozenset(
         "experiment_seed",
         "runtime_versions",
         "training_image",
+        "training_base_image",
+        "training_image_contract_sha256",
+        "training_image_runtime_inventory_sha256",
+        "training_bootstrap_protocol",
+        "training_plan_sha256",
+        "training_staging_receipt_sha256",
+        "source_bundle",
         "experiment_config",
         "deepspeed_config",
         "dataset",
@@ -114,6 +125,13 @@ _SELECTION_KEYS = frozenset(
 @dataclass(frozen=True)
 class ControlledArtifactExpectation:
     artifact_manifest_sha256: str
+    training_plan_sha256: str
+    training_staging_receipt_sha256: str
+    source_bundle_name: str
+    source_bundle_size: int
+    source_bundle_sha256: str
+    source_bundle_inventory_sha256: str
+    source_bundle_commit_epoch: int
     experiment_id: str
     outer_fold: int
     query_view: str
@@ -129,6 +147,32 @@ class ControlledArtifactExpectation:
             self.artifact_manifest_sha256,
             name="expectation.artifact_manifest_sha256",
         )
+        _require_sha256(
+            self.training_plan_sha256,
+            name="expectation.training_plan_sha256",
+        )
+        _require_sha256(
+            self.training_staging_receipt_sha256,
+            name="expectation.training_staging_receipt_sha256",
+        )
+        _require_sha256(
+            self.source_bundle_sha256,
+            name="expectation.source_bundle_sha256",
+        )
+        _require_sha256(
+            self.source_bundle_inventory_sha256,
+            name="expectation.source_bundle_inventory_sha256",
+        )
+        if (
+            type(self.source_bundle_name) is not str
+            or self.source_bundle_name
+            != f"source-{self.source_bundle_sha256}.tar.gz"
+            or type(self.source_bundle_size) is not int
+            or self.source_bundle_size < 1
+            or type(self.source_bundle_commit_epoch) is not int
+            or self.source_bundle_commit_epoch < 1
+        ):
+            raise ValueError("Controlled expected source-bundle identity is invalid")
         if type(self.experiment_id) is not str or self.experiment_id != CONTROLLED_EXPERIMENT_ID:
             raise ValueError(
                 f"Controlled experiment_id must be {CONTROLLED_EXPERIMENT_ID!r}"
@@ -182,6 +226,18 @@ class ControlledArtifactIdentity:
     wrapper_config_sha256: str
     tokenizer_inventory_sha256: str
     encoder_config_inventory_sha256: str
+    training_image: str
+    training_base_image: str
+    training_image_runtime_inventory_sha256: str
+    training_image_contract_sha256: str
+    training_bootstrap_protocol: str
+    training_plan_sha256: str
+    training_staging_receipt_sha256: str
+    source_bundle_name: str
+    source_bundle_size: int
+    source_bundle_sha256: str
+    source_bundle_inventory_sha256: str
+    source_bundle_commit_epoch: int
     experiment_id: str
     outer_fold: int
     query_view: str
@@ -860,8 +916,68 @@ def _validate_controlled_run(
 
     if run["runtime_versions"] != EXPECTED_RUNTIME_VERSIONS:
         raise ValueError("Controlled run runtime-version provenance changed")
-    if run["training_image"] != EXPECTED_TRAINING_IMAGE:
+    if run["training_image"] != EXPECTED_DERIVED_TRAINING_IMAGE:
         raise ValueError("Controlled run training-image provenance changed")
+    if run["training_base_image"] != EXPECTED_BASE_TRAINING_IMAGE:
+        raise ValueError("Controlled run base-training-image provenance changed")
+    if (
+        run["training_image_runtime_inventory_sha256"]
+        != EXPECTED_DERIVED_TRAINING_IMAGE_RUNTIME_INVENTORY_SHA256
+    ):
+        raise ValueError("Controlled run training-image runtime inventory changed")
+    if (
+        run["training_image_contract_sha256"]
+        != EXPECTED_DERIVED_TRAINING_IMAGE_CONTRACT_SHA256
+    ):
+        raise ValueError("Controlled run training-image contract changed")
+    if run["training_bootstrap_protocol"] != EXPECTED_TRAINING_BOOTSTRAP_PROTOCOL:
+        raise ValueError("Controlled run training bootstrap protocol changed")
+    _require_sha256(
+        run["training_plan_sha256"], name="controlled_run.training_plan_sha256"
+    )
+    _require_sha256(
+        run["training_staging_receipt_sha256"],
+        name="controlled_run.training_staging_receipt_sha256",
+    )
+    if (
+        run["training_plan_sha256"] != expectation.training_plan_sha256
+        or run["training_staging_receipt_sha256"]
+        != expectation.training_staging_receipt_sha256
+    ):
+        raise ValueError("Controlled run launch-receipt provenance changed")
+    source_bundle = run["source_bundle"]
+    if type(source_bundle) is not dict or set(source_bundle) != {
+        "commit_epoch",
+        "inventory_sha256",
+        "name",
+        "sha256",
+        "size",
+    }:
+        raise ValueError("Controlled run source-bundle schema changed")
+    _require_sha256(
+        source_bundle["sha256"], name="controlled_run.source_bundle.sha256"
+    )
+    _require_sha256(
+        source_bundle["inventory_sha256"],
+        name="controlled_run.source_bundle.inventory_sha256",
+    )
+    if (
+        source_bundle["name"] != f"source-{source_bundle['sha256']}.tar.gz"
+        or type(source_bundle["size"]) is not int
+        or source_bundle["size"] < 1
+        or type(source_bundle["commit_epoch"]) is not int
+        or source_bundle["commit_epoch"] < 1
+    ):
+        raise ValueError("Controlled run source-bundle identity changed")
+    expected_source_bundle = {
+        "commit_epoch": expectation.source_bundle_commit_epoch,
+        "inventory_sha256": expectation.source_bundle_inventory_sha256,
+        "name": expectation.source_bundle_name,
+        "sha256": expectation.source_bundle_sha256,
+        "size": expectation.source_bundle_size,
+    }
+    if source_bundle != expected_source_bundle:
+        raise ValueError("Controlled run source-bundle provenance changed")
     expected_config_hashes = {
         "experiment_config": ("experiment.json", EXPECTED_EXPERIMENT_CONFIG_SHA256),
         "deepspeed_config": ("ds_zero3.json", EXPECTED_DEEPSPEED_CONFIG_SHA256),
@@ -1343,6 +1459,24 @@ def validate_controlled_artifact(
         wrapper_config_sha256=manifest["wrapper_config"]["sha256"],
         tokenizer_inventory_sha256=tokenizer_inventory_sha256,
         encoder_config_inventory_sha256=encoder_inventory_sha256,
+        training_image=run["training_image"],
+        training_base_image=run["training_base_image"],
+        training_image_runtime_inventory_sha256=run[
+            "training_image_runtime_inventory_sha256"
+        ],
+        training_image_contract_sha256=run["training_image_contract_sha256"],
+        training_bootstrap_protocol=run["training_bootstrap_protocol"],
+        training_plan_sha256=expectation.training_plan_sha256,
+        training_staging_receipt_sha256=(
+            expectation.training_staging_receipt_sha256
+        ),
+        source_bundle_name=expectation.source_bundle_name,
+        source_bundle_size=expectation.source_bundle_size,
+        source_bundle_sha256=expectation.source_bundle_sha256,
+        source_bundle_inventory_sha256=(
+            expectation.source_bundle_inventory_sha256
+        ),
+        source_bundle_commit_epoch=expectation.source_bundle_commit_epoch,
         experiment_id=expectation.experiment_id,
         outer_fold=expectation.outer_fold,
         query_view=expectation.query_view,

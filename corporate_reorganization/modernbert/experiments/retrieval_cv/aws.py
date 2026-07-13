@@ -42,19 +42,19 @@ EXPECTED_LOCAL_IMAGE_REF = (
     "build-sha256-249a373465c33d2af5f807eecf6016b08dc086ca04b588e3a2a6a5a640aa2fc8-build1"
 )
 EXPECTED_TRAINING_IMAGE_REF = (
-    "arr-retrieval-train:step8-parent-build1"
+    "arr-retrieval-train:step10a-bootstrap-build1"
 )
 EXPECTED_TRAINING_IMAGE_DIGEST = (
-    "sha256:78221762d9cc7dd24a3f9958f1caabfe6d06eb5668fe82d5055038b803291712"
+    "sha256:b44c9b182a2490329b25394568299420bcfbe85a8fb17df955378b1f3630d9be"
 )
 EXPECTED_TRAINING_CONFIG_DIGEST = (
-    "sha256:aff8c9ca06b1a2aa8c78480cc8c27476eb32761176efe244eb5563dc37cfc9ad"
+    "sha256:24784672e3d1f8004fe6577069d6f01393239310276a570f5e8d0db1fe13b85f"
 )
 EXPECTED_TRAINING_CONTRACT_SHA256 = (
-    "6df440464cb8a317b2703e885f1efc8431edfdf16a29f729aef4f62c36fbfe09"
+    "db4b2b307a56686054c2c04fbcebf5c133077765074ceef61a613c183a4b04ef"
 )
 EXPECTED_TRAINING_RUNTIME_INVENTORY_SHA256 = (
-    "a35fd4c0cfeba0cfd9fb786833e497918b0b74afb35f583cf1b6c37fb6ce4998"
+    "1151907eb4c0c63a6a317ae11b909ceb7bbbe29d4a56c46d8bec91d8424d795c"
 )
 EXPECTED_AWS_SDK_VERSIONS = {
     "boto3": "1.39.12",
@@ -294,17 +294,46 @@ def validate_artifact_bucket(s3: object, *, bucket: str, region: str) -> None:
         raise ValueError("Artifact bucket ownership contract changed")
 
 
-def assert_unused_versioned_prefix(s3: object, *, bucket: str, prefix: str) -> None:
+def assert_unused_versioned_prefix(
+    s3: object,
+    *,
+    bucket: str,
+    prefix: str,
+    expected_bucket_owner: str,
+) -> None:
     if not prefix or prefix.startswith("/") or not prefix.endswith("/") or "//" in prefix:
         raise ValueError("S3 check requires one normalized non-root prefix ending in slash")
-    response = s3.list_object_versions(Bucket=bucket, Prefix=prefix, MaxKeys=2)
-    versions = response.get("Versions", [])
-    delete_markers = response.get("DeleteMarkers", [])
+    if type(expected_bucket_owner) is not str or _ACCOUNT.fullmatch(
+        expected_bucket_owner
+    ) is None:
+        raise ValueError("S3 prefix check requires one exact expected bucket owner")
+    response = s3.list_object_versions(
+        Bucket=bucket,
+        ExpectedBucketOwner=expected_bucket_owner,
+        Prefix=prefix,
+        MaxKeys=2,
+    )
+    if (
+        type(response) is not dict
+        or response.get("Name") != bucket
+        or response.get("Prefix") != prefix
+        or response.get("MaxKeys") != 2
+        or type(response.get("IsTruncated")) is not bool
+    ):
+        raise RuntimeError("Unused-prefix probe returned an invalid response identity")
+    raw_versions = response.get("Versions")
+    raw_delete_markers = response.get("DeleteMarkers")
+    if raw_versions is not None and type(raw_versions) is not list:
+        raise RuntimeError("Unused-prefix probe Versions must be an optional exact list")
+    if raw_delete_markers is not None and type(raw_delete_markers) is not list:
+        raise RuntimeError("Unused-prefix probe DeleteMarkers must be an optional exact list")
+    versions = [] if raw_versions is None else raw_versions
+    delete_markers = [] if raw_delete_markers is None else raw_delete_markers
     if versions or delete_markers:
         raise FileExistsError(
             f"Refusing used immutable S3 prefix, including historical versions: s3://{bucket}/{prefix}"
         )
-    if response.get("IsTruncated"):
+    if response["IsTruncated"]:
         raise RuntimeError("Unused-prefix probe was unexpectedly truncated")
 
 
@@ -314,6 +343,7 @@ def stage_file_once(
     source_path: Path,
     bucket: str,
     key: str,
+    expected_bucket_owner: str,
 ) -> dict[str, Any]:
     """Conditionally publish one exact object and verify its versioned readback."""
 
@@ -322,29 +352,43 @@ def stage_file_once(
         raise ValueError(f"Staged source must be one regular non-symlink file: {source_path}")
     if not key or key.startswith("/") or key.endswith("/") or "//" in key:
         raise ValueError("Staged S3 key must be normalized and identify one object")
-    payload = source_path.read_bytes()
-    if not payload:
+    if type(expected_bucket_owner) is not str or _ACCOUNT.fullmatch(
+        expected_bucket_owner
+    ) is None:
+        raise ValueError("Staged S3 object requires one exact expected bucket owner")
+    size = source_path.stat().st_size
+    if size < 1:
         raise ValueError("Refusing to stage an empty source file")
-    digest_bytes = hashlib.sha256(payload).digest()
+    sha256 = hashlib.sha256()
+    md5 = hashlib.md5(usedforsecurity=False)
+    with source_path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            sha256.update(chunk)
+            md5.update(chunk)
+    digest_bytes = sha256.digest()
     digest_hex = digest_bytes.hex()
     checksum = base64.b64encode(digest_bytes).decode("ascii")
-    response = s3.put_object(
-        Bucket=bucket,
-        Key=key,
-        Body=payload,
-        ContentLength=len(payload),
-        ChecksumAlgorithm="SHA256",
-        ChecksumSHA256=checksum,
-        IfNoneMatch="*",
-        Metadata={"sha256": digest_hex},
-        ServerSideEncryption="AES256",
-    )
+    expected_etag = f'"{md5.hexdigest()}"'
+    with source_path.open("rb") as source:
+        response = s3.put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=source,
+            ContentLength=size,
+            ChecksumAlgorithm="SHA256",
+            ChecksumSHA256=checksum,
+            ExpectedBucketOwner=expected_bucket_owner,
+            IfNoneMatch="*",
+            Metadata={"sha256": digest_hex},
+            ServerSideEncryption="AES256",
+        )
     version_id = response.get("VersionId")
     if (
         type(version_id) is not str
         or not version_id
         or response.get("ServerSideEncryption") != "AES256"
         or response.get("ChecksumSHA256") != checksum
+        or response.get("ETag") != expected_etag
     ):
         raise RuntimeError("S3 conditional publication returned incomplete identity")
     head = s3.head_object(
@@ -352,24 +396,42 @@ def stage_file_once(
         Key=key,
         VersionId=version_id,
         ChecksumMode="ENABLED",
+        ExpectedBucketOwner=expected_bucket_owner,
     )
     if (
-        head.get("ContentLength") != len(payload)
+        head.get("ContentLength") != size
         or head.get("ChecksumSHA256") != checksum
         or head.get("ServerSideEncryption") != "AES256"
         or head.get("Metadata") != {"sha256": digest_hex}
         or head.get("VersionId") != version_id
+        or head.get("ETag") != expected_etag
     ):
         raise RuntimeError("S3 staged object metadata changed on readback")
-    body = s3.get_object(Bucket=bucket, Key=key, VersionId=version_id)["Body"].read()
-    if type(body) is not bytes or body != payload:
+    body = s3.get_object(
+        Bucket=bucket,
+        ExpectedBucketOwner=expected_bucket_owner,
+        Key=key,
+        VersionId=version_id,
+    )["Body"]
+    readback_sha256 = hashlib.sha256()
+    readback_size = 0
+    while True:
+        chunk = body.read(1024 * 1024)
+        if type(chunk) is not bytes:
+            raise RuntimeError("S3 staged object readback returned non-bytes")
+        if not chunk:
+            break
+        readback_size += len(chunk)
+        readback_sha256.update(chunk)
+    if readback_size != size or readback_sha256.hexdigest() != digest_hex:
         raise RuntimeError("S3 staged object bytes changed on versioned readback")
     return {
         "bucket": bucket,
+        "etag": expected_etag,
         "key": key,
         "schema_version": 1,
         "sha256": digest_hex,
-        "size": len(payload),
+        "size": size,
         "sse": "AES256",
         "version_id": version_id,
     }
@@ -467,6 +529,9 @@ def validate_local_training_image(
             "docker",
             "run",
             "--rm",
+            "--network",
+            "none",
+            "--pull=never",
             "--entrypoint",
             "/opt/conda/bin/python",
             f"arr-retrieval-train@{EXPECTED_TRAINING_IMAGE_DIGEST}",

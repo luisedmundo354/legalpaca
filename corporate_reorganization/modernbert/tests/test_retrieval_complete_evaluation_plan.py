@@ -125,6 +125,13 @@ def _systems() -> list[dict[str, object]]:
                         "query_view": query_view,
                         "expectation": {
                             "artifact_manifest_sha256": f"{position:064x}",
+                            "training_plan_sha256": "1" * 64,
+                            "training_staging_receipt_sha256": "2" * 64,
+                            "source_bundle_name": f"source-{'3' * 64}.tar.gz",
+                            "source_bundle_size": 12_345,
+                            "source_bundle_sha256": "3" * 64,
+                            "source_bundle_inventory_sha256": "4" * 64,
+                            "source_bundle_commit_epoch": 1_700_000_000,
                             "experiment_id": "arr_retrieval_cv_v1",
                             "outer_fold": 0,
                             "query_view": query_view,
@@ -149,7 +156,7 @@ def _plan() -> dict[str, object]:
     folds = json.loads(FOLDS_PATH.read_bytes())
     role = folds["rotations"][0]["test"]
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "experiment_id": "arr_retrieval_cv_v1",
         "outer_fold": 0,
         "role": "test",
@@ -749,6 +756,24 @@ class CompleteEvaluationPlanTest(unittest.TestCase):
         wrong_batch = _plan()
         wrong_batch["passage_batch_size"] = 1
         mutations.append((wrong_batch, "passage_batch_size"))
+        mixed_source = _plan()
+        controlled = next(
+            system
+            for system in mixed_source["systems"]
+            if system["system_type"] == CONTROLLED_DUAL_ENCODER_SYSTEM_TYPE
+        )
+        controlled["expectation"]["source_bundle_sha256"] = "5" * 64
+        controlled["expectation"]["source_bundle_name"] = f"source-{'5' * 64}.tar.gz"
+        mutations.append((mixed_source, "mixes controlled launch"))
+        mixed_ledger = _plan()
+        controlled = next(
+            system
+            for system in mixed_ledger["systems"]
+            if system["system_type"] == CONTROLLED_DUAL_ENCODER_SYSTEM_TYPE
+        )
+        controlled["expectation"]["training_plan_sha256"] = "5" * 64
+        controlled["expectation"]["training_staging_receipt_sha256"] = "6" * 64
+        mutations.append((mixed_ledger, "mixes controlled launch"))
         for plan, message in mutations:
             with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
                 _validate_complete_evaluation_plan(

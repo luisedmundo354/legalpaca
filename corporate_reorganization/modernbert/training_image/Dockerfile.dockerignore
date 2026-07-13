@@ -2,6 +2,7 @@
 !training_image/
 !training_image/Dockerfile
 !training_image/Dockerfile.dockerignore
+!training_image/bootstrap.py
 !training_image/image_contract.json
 !training_image/requirements.lock
 !training_image/runtime_contract.py

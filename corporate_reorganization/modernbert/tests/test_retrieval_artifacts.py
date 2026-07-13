@@ -6,7 +6,7 @@ import os
 import sys
 import tempfile
 import unittest
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable
@@ -40,7 +40,11 @@ from retriever.provenance import (  # noqa: E402
     EXPECTED_RUNTIME_VERSIONS,
     EXPECTED_SNAPSHOT_MANIFEST_SHA256,
     EXPECTED_SNAPSHOT_TREE_SHA256,
-    EXPECTED_TRAINING_IMAGE,
+    EXPECTED_BASE_TRAINING_IMAGE,
+    EXPECTED_DERIVED_TRAINING_IMAGE,
+    EXPECTED_DERIVED_TRAINING_IMAGE_CONTRACT_SHA256,
+    EXPECTED_DERIVED_TRAINING_IMAGE_RUNTIME_INVENTORY_SHA256,
+    EXPECTED_TRAINING_BOOTSTRAP_PROTOCOL,
     EXPECTED_TRAIN_QUERY_IDS_SHA256_BY_OUTER_FOLD,
     EXPECTED_VALIDATION_IDENTITY_BY_CELL,
 )
@@ -50,6 +54,18 @@ SHA_A = "a" * 64
 SHA_B = "b" * 64
 SHA_C = "c" * 64
 SHA_D = "d" * 64
+
+
+def _launch_expectation() -> dict[str, object]:
+    return {
+        "training_plan_sha256": SHA_A,
+        "training_staging_receipt_sha256": SHA_B,
+        "source_bundle_name": f"source-{SHA_D}.tar.gz",
+        "source_bundle_size": 12_345,
+        "source_bundle_sha256": SHA_D,
+        "source_bundle_inventory_sha256": SHA_C,
+        "source_bundle_commit_epoch": 1_700_000_000,
+    }
 
 
 def _write_json(path: Path, value: object) -> None:
@@ -324,7 +340,24 @@ def _build_artifact(
         "sampler": "local_unique",
         "experiment_seed": 17,
         "runtime_versions": EXPECTED_RUNTIME_VERSIONS,
-        "training_image": EXPECTED_TRAINING_IMAGE,
+        "training_image": EXPECTED_DERIVED_TRAINING_IMAGE,
+        "training_base_image": EXPECTED_BASE_TRAINING_IMAGE,
+        "training_image_runtime_inventory_sha256": (
+            EXPECTED_DERIVED_TRAINING_IMAGE_RUNTIME_INVENTORY_SHA256
+        ),
+        "training_image_contract_sha256": (
+            EXPECTED_DERIVED_TRAINING_IMAGE_CONTRACT_SHA256
+        ),
+        "training_bootstrap_protocol": EXPECTED_TRAINING_BOOTSTRAP_PROTOCOL,
+        "training_plan_sha256": SHA_A,
+        "training_staging_receipt_sha256": SHA_B,
+        "source_bundle": {
+            "commit_epoch": 1_700_000_000,
+            "inventory_sha256": SHA_C,
+            "name": f"source-{SHA_D}.tar.gz",
+            "sha256": SHA_D,
+            "size": 12_345,
+        },
         "experiment_config": {
             "path": "experiment.json",
             "sha256": EXPECTED_EXPERIMENT_CONFIG_SHA256,
@@ -420,6 +453,7 @@ def _build_artifact(
     _write_json(root / "artifact_manifest.json", artifact_manifest)
     return ControlledArtifactExpectation(
         artifact_manifest_sha256=_sha256(root / "artifact_manifest.json"),
+        **_launch_expectation(),
         experiment_id=CONTROLLED_EXPERIMENT_ID,
         outer_fold=0,
         query_view="structured",
@@ -457,6 +491,7 @@ def _refresh_run_and_manifest(root: Path) -> ControlledArtifactExpectation:
     _write_json(root / "artifact_manifest.json", manifest)
     return ControlledArtifactExpectation(
         artifact_manifest_sha256=_sha256(root / "artifact_manifest.json"),
+        **_launch_expectation(),
         experiment_id=CONTROLLED_EXPERIMENT_ID,
         outer_fold=0,
         query_view="structured",
@@ -494,6 +529,15 @@ class ControlledArtifactManifestTests(unittest.TestCase):
                 artifact.identity.snapshot_tree_sha256,
                 EXPECTED_SNAPSHOT_TREE_SHA256,
             )
+            identity = asdict(artifact.identity)
+            self.assertEqual(identity["training_image"], EXPECTED_DERIVED_TRAINING_IMAGE)
+            self.assertEqual(identity["training_base_image"], EXPECTED_BASE_TRAINING_IMAGE)
+            self.assertEqual(identity["training_plan_sha256"], SHA_A)
+            self.assertEqual(identity["training_staging_receipt_sha256"], SHA_B)
+            self.assertEqual(identity["source_bundle_sha256"], SHA_D)
+            self.assertEqual(identity["source_bundle_inventory_sha256"], SHA_C)
+            self.assertEqual(identity["source_bundle_size"], 12_345)
+            self.assertEqual(identity["source_bundle_commit_epoch"], 1_700_000_000)
             self.assertEqual(artifact.model_path, root.resolve() / "model.safetensors")
             self.assertEqual(artifact.tokenizer_dir.name, "tokenizer")
             self.assertEqual(artifact.slot_token_id, 7)
@@ -503,6 +547,7 @@ class ControlledArtifactManifestTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "outer_fold"):
             ControlledArtifactExpectation(
                 artifact_manifest_sha256=SHA_A,
+                **_launch_expectation(),
                 experiment_id=CONTROLLED_EXPERIMENT_ID,
                 outer_fold=True,
                 query_view="structured",
@@ -516,6 +561,7 @@ class ControlledArtifactManifestTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "protocol"):
             ControlledArtifactExpectation(
                 artifact_manifest_sha256=SHA_A,
+                **_launch_expectation(),
                 experiment_id=CONTROLLED_EXPERIMENT_ID,
                 outer_fold=0,
                 query_view="structured",
@@ -526,6 +572,21 @@ class ControlledArtifactManifestTests(unittest.TestCase):
                 passage_index_sha256=EXPECTED_PASSAGE_INDEX_SHA256,
                 model_artifact_protocol="legacy",
             )
+        with tempfile.TemporaryDirectory() as tmp:
+            _, expectation = self._fixture(tmp)
+            invalid_launch_values = (
+                ({"training_plan_sha256": "changed"}, "training_plan_sha256"),
+                ({"source_bundle_name": "source-wrong.tar.gz"}, "source-bundle"),
+                ({"source_bundle_size": True}, "source-bundle"),
+                ({"source_bundle_size": 0}, "source-bundle"),
+                ({"source_bundle_commit_epoch": True}, "source-bundle"),
+                ({"source_bundle_commit_epoch": 0}, "source-bundle"),
+            )
+            for values, message in invalid_launch_values:
+                with self.subTest(values=values), self.assertRaisesRegex(
+                    ValueError, message
+                ):
+                    replace(expectation, **values)
 
     def test_rejects_missing_commit_marker_and_wrong_external_digest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -616,7 +677,41 @@ class ControlledArtifactManifestTests(unittest.TestCase):
             train_cases.sort(key=int)
             test_cases.sort(key=int)
 
+        def change_source_bundle(value: dict[str, Any]) -> None:
+            value["source_bundle"] = {
+                "commit_epoch": 1_800_000_000,
+                "inventory_sha256": SHA_A,
+                "name": f"source-{SHA_B}.tar.gz",
+                "sha256": SHA_B,
+                "size": 54_321,
+            }
+
         mutations = {
+            "training_image": lambda value: value.__setitem__(
+                "training_image", "changed"
+            ),
+            "training_base_image": lambda value: value.__setitem__(
+                "training_base_image", "changed"
+            ),
+            "training_image_runtime_inventory": lambda value: value.__setitem__(
+                "training_image_runtime_inventory_sha256", SHA_D
+            ),
+            "training_image_contract": lambda value: value.__setitem__(
+                "training_image_contract_sha256", SHA_D
+            ),
+            "training_bootstrap_protocol": lambda value: value.__setitem__(
+                "training_bootstrap_protocol", "changed"
+            ),
+            "training_plan": lambda value: value.__setitem__(
+                "training_plan_sha256", SHA_D
+            ),
+            "training_staging": lambda value: value.__setitem__(
+                "training_staging_receipt_sha256", SHA_D
+            ),
+            "source_bundle_invalid": lambda value: value["source_bundle"].__setitem__(
+                "size", 0
+            ),
+            "source_bundle_valid_substitution": change_source_bundle,
             "experiment_config": lambda value: value["experiment_config"].__setitem__(
                 "sha256", SHA_D
             ),
@@ -652,6 +747,18 @@ class ControlledArtifactManifestTests(unittest.TestCase):
                 _edit_json(root / "controlled_run.json", mutate)
                 expectation = _refresh_run_and_manifest(root)
                 with self.assertRaisesRegex(ValueError, "frozen|changed"):
+                    validate_controlled_artifact(root, expectation=expectation)
+
+    def test_rejects_invalid_training_launch_hashes_after_complete_rehash(self) -> None:
+        for field in ("training_plan_sha256", "training_staging_receipt_sha256"):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:
+                root, _ = self._fixture(tmp)
+                _edit_json(
+                    root / "controlled_run.json",
+                    lambda value, field=field: value.__setitem__(field, "changed"),
+                )
+                expectation = _refresh_run_and_manifest(root)
+                with self.assertRaisesRegex(ValueError, "lowercase SHA-256"):
                     validate_controlled_artifact(root, expectation=expectation)
 
     def test_rejects_wrong_nested_inventory_even_when_outer_hashes_are_refreshed(self) -> None:
@@ -730,6 +837,7 @@ class ControlledArtifactManifestTests(unittest.TestCase):
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             expectation = ControlledArtifactExpectation(
                 artifact_manifest_sha256=_sha256(manifest_path),
+                **_launch_expectation(),
                 experiment_id=CONTROLLED_EXPERIMENT_ID,
                 outer_fold=0,
                 query_view="structured",

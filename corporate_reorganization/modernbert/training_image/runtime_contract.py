@@ -27,6 +27,18 @@ ENTRYPOINT_SCRIPT_SHA256 = (
 )
 TRAINING_MODULE = "sagemaker_pytorch_container.training:main"
 ALLOWED_PYTHON_HASH_SEEDS = ["17", "29", "43"]
+BOOTSTRAP_PATH = "/opt/training_bootstrap/bootstrap.py"
+BOOTSTRAP_PROTOCOL = "arr_retrieval_training_source_bootstrap_v1"
+BOOTSTRAP_ENTRYPOINT = "train_sm.py"
+BOOTSTRAP_SHA256 = (
+    "a0f47d63e01209432bcaba2241ec93be77d2b81c05802c97f570843eddc7d5e1"
+)
+EXPECTED_BOOTSTRAP = {
+    "entrypoint": BOOTSTRAP_ENTRYPOINT,
+    "path": BOOTSTRAP_PATH,
+    "protocol": BOOTSTRAP_PROTOCOL,
+    "sha256": BOOTSTRAP_SHA256,
+}
 
 EXPECTED_PACKAGES = {
     "accelerate": "1.4.0",
@@ -107,6 +119,7 @@ EXPECTED_CUDA = {
 }
 _CONTRACT_KEYS = {
     "base_image",
+    "bootstrap",
     "cuda",
     "environment",
     "packages",
@@ -116,6 +129,7 @@ _CONTRACT_KEYS = {
     "schema_version",
 }
 _INVENTORY_KEYS = {
+    "bootstrap",
     "contract_sha256",
     "cuda",
     "environment",
@@ -164,6 +178,7 @@ def validate_contract(contract: Mapping[str, object]) -> None:
         raise ValueError("Training-image contract schema changed")
     expected = {
         "base_image": {"digest": BASE_IMAGE_DIGEST, "uri": BASE_IMAGE_URI},
+        "bootstrap": EXPECTED_BOOTSTRAP,
         "cuda": EXPECTED_CUDA,
         "environment": {
             "fixed": FIXED_ENVIRONMENT,
@@ -187,7 +202,7 @@ def validate_contract(contract: Mapping[str, object]) -> None:
             "script_sha256": ENTRYPOINT_SCRIPT_SHA256,
             "training_module": TRAINING_MODULE,
         },
-        "schema_version": 1,
+        "schema_version": 2,
     }
     if dict(contract) != expected:
         raise ValueError("Training-image contract values changed")
@@ -235,8 +250,22 @@ def collect_inventory(
         raise RuntimeError(
             f"SageMaker entrypoint script must be a regular non-symlink: {entrypoint_script}"
         )
+    bootstrap = Path(BOOTSTRAP_PATH)
+    bootstrap_mode = bootstrap.lstat().st_mode
+    if (
+        stat.S_ISLNK(bootstrap_mode)
+        or not stat.S_ISREG(bootstrap_mode)
+        or stat.S_IMODE(bootstrap_mode) != 0o555
+    ):
+        raise RuntimeError(
+            f"Training bootstrap must be a 0555 regular non-symlink: {bootstrap}"
+        )
 
     inventory = {
+        "bootstrap": {
+            **EXPECTED_BOOTSTRAP,
+            "sha256": _sha256_bytes(bootstrap.read_bytes()),
+        },
         "contract_sha256": contract_sha256,
         "cuda": {
             "cuda_version": environment.get("CUDA_VERSION"),
@@ -265,7 +294,7 @@ def collect_inventory(
             "script_sha256": _sha256_bytes(entrypoint_script.read_bytes()),
             "training_module": environment.get("SAGEMAKER_TRAINING_MODULE"),
         },
-        "schema_version": 1,
+        "schema_version": 2,
     }
     validate_inventory(inventory, contract_sha256=contract_sha256)
     return inventory
@@ -278,10 +307,14 @@ def validate_inventory(
 ) -> None:
     if set(inventory) != _INVENTORY_KEYS:
         raise RuntimeError("Training-image inventory schema changed")
-    if inventory["schema_version"] != 1:
+    if inventory["schema_version"] != 2:
         raise RuntimeError("Training-image inventory schema_version changed")
     if inventory["contract_sha256"] != contract_sha256:
         raise RuntimeError("Training-image contract digest changed")
+    if inventory["bootstrap"] != EXPECTED_BOOTSTRAP:
+        raise RuntimeError(
+            f"Training bootstrap identity changed: {inventory['bootstrap']!r}"
+        )
     if inventory["python"] != {"implementation": "CPython", "version": "3.11.10"}:
         raise RuntimeError(f"Python runtime changed: {inventory['python']!r}")
     if inventory["packages"] != EXPECTED_PACKAGES:

@@ -44,10 +44,10 @@ from .staged_data import validate_staged_dataset_and_fold
 
 EVALUATION_BUNDLE_SCHEMA_VERSION = 1
 EVALUATION_BUNDLE_PROTOCOL = "canonical_complete_rankings_v1"
-EVALUATION_PLAN_SCHEMA_VERSION = 1
+EVALUATION_PLAN_SCHEMA_VERSION = 2
 LOCAL_BINDINGS_SCHEMA_VERSION = 1
 CONTROLLED_DUAL_ENCODER_SYSTEM_TYPE = "controlled_dual_encoder_artifact"
-COMPLETE_EVALUATION_PLAN_SCHEMA_VERSION = 2
+COMPLETE_EVALUATION_PLAN_SCHEMA_VERSION = 3
 COMPLETE_LOCAL_BINDINGS_SCHEMA_VERSION = 2
 BM25_SYSTEM_TYPE = "bm25_pyserini"
 E5_SYSTEM_TYPE = "e5_base_v2"
@@ -1054,7 +1054,10 @@ def _validate_controlled_evaluation_plan(
     if plan["schema_version"] != EVALUATION_PLAN_SCHEMA_VERSION or type(
         plan["schema_version"]
     ) is not int:
-        raise ValueError("Evaluation plan schema_version must be exact integer 1")
+        raise ValueError(
+            "Evaluation plan schema_version must be exact integer "
+            f"{EVALUATION_PLAN_SCHEMA_VERSION}"
+        )
     identity = EvaluationIdentity(
         experiment_id=plan["experiment_id"],
         outer_fold=plan["outer_fold"],
@@ -1102,8 +1105,16 @@ def _validate_controlled_evaluation_plan(
     }
     normalized_systems: list[dict[str, Any]] = []
     system_ids: list[str] = []
+    launch_identities: set[tuple[object, ...]] = set()
     expectation_keys = {
         "artifact_manifest_sha256",
+        "training_plan_sha256",
+        "training_staging_receipt_sha256",
+        "source_bundle_name",
+        "source_bundle_size",
+        "source_bundle_sha256",
+        "source_bundle_inventory_sha256",
+        "source_bundle_commit_epoch",
         "experiment_id",
         "outer_fold",
         "query_view",
@@ -1152,7 +1163,18 @@ def _validate_controlled_evaluation_plan(
             or expectation["passage_index_sha256"] != identity.passage_index_sha256
         ):
             raise ValueError(f"System {system_id!r} artifact expectation left the plan identity")
-        ControlledArtifactExpectation(**expectation)
+        artifact_expectation = ControlledArtifactExpectation(**expectation)
+        launch_identities.add(
+            (
+                artifact_expectation.training_plan_sha256,
+                artifact_expectation.training_staging_receipt_sha256,
+                artifact_expectation.source_bundle_name,
+                artifact_expectation.source_bundle_size,
+                artifact_expectation.source_bundle_sha256,
+                artifact_expectation.source_bundle_inventory_sha256,
+                artifact_expectation.source_bundle_commit_epoch,
+            )
+        )
         system_ids.append(system_id)
         normalized_systems.append(
             {
@@ -1164,6 +1186,8 @@ def _validate_controlled_evaluation_plan(
         )
     if system_ids != sorted(system_ids) or len(system_ids) != len(set(system_ids)):
         raise ValueError("Evaluation plan systems must be unique and sorted by system_id")
+    if len(launch_identities) != 1:
+        raise ValueError("Evaluation plan mixes controlled launch-ledger identities")
     return identity, case_ids, normalized_systems
 
 
@@ -1205,7 +1229,10 @@ def _validate_complete_evaluation_plan(
         plan["schema_version"] != COMPLETE_EVALUATION_PLAN_SCHEMA_VERSION
         or type(plan["schema_version"]) is not int
     ):
-        raise ValueError("Complete evaluation plan schema_version must be exact integer 2")
+        raise ValueError(
+            "Complete evaluation plan schema_version must be exact integer "
+            f"{COMPLETE_EVALUATION_PLAN_SCHEMA_VERSION}"
+        )
     identity = EvaluationIdentity(
         experiment_id=plan["experiment_id"],
         outer_fold=plan["outer_fold"],
@@ -1260,6 +1287,7 @@ def _validate_complete_evaluation_plan(
     normalized: list[dict[str, Any]] = []
     system_ids: list[str] = []
     controlled_cells: set[tuple[str, str, int]] = set()
+    controlled_launch_identities: set[tuple[object, ...]] = set()
     baseline_types: set[str] = set()
     from .artifacts import ControlledArtifactExpectation
     from .baseline_artifacts import (
@@ -1312,6 +1340,13 @@ def _validate_complete_evaluation_plan(
         if system_type == CONTROLLED_DUAL_ENCODER_SYSTEM_TYPE:
             expected_keys = {
                 "artifact_manifest_sha256",
+                "training_plan_sha256",
+                "training_staging_receipt_sha256",
+                "source_bundle_name",
+                "source_bundle_size",
+                "source_bundle_sha256",
+                "source_bundle_inventory_sha256",
+                "source_bundle_commit_epoch",
                 "experiment_id",
                 "outer_fold",
                 "query_view",
@@ -1325,6 +1360,17 @@ def _validate_complete_evaluation_plan(
             if set(expectation) != expected_keys:
                 raise ValueError(f"Controlled system {system_id!r} expectation schema changed")
             artifact_expectation = ControlledArtifactExpectation(**expectation)
+            controlled_launch_identities.add(
+                (
+                    artifact_expectation.training_plan_sha256,
+                    artifact_expectation.training_staging_receipt_sha256,
+                    artifact_expectation.source_bundle_name,
+                    artifact_expectation.source_bundle_size,
+                    artifact_expectation.source_bundle_sha256,
+                    artifact_expectation.source_bundle_inventory_sha256,
+                    artifact_expectation.source_bundle_commit_epoch,
+                )
+            )
             expected_system_id = (
                 f"{artifact_expectation.query_view}_"
                 f"{artifact_expectation.sampler}_seed"
@@ -1429,6 +1475,10 @@ def _validate_complete_evaluation_plan(
     }
     if controlled_cells != expected_cells:
         raise ValueError("Complete evaluation plan does not cover the exact 12 controlled cells")
+    if len(controlled_launch_identities) != 1:
+        raise ValueError(
+            "Complete evaluation plan mixes controlled launch-ledger identities"
+        )
     if baseline_types != {BM25_SYSTEM_TYPE, E5_SYSTEM_TYPE, FIXED_BASE_SYSTEM_TYPE}:
         raise ValueError("Complete evaluation plan baseline inventory changed")
     return identity, case_ids, normalized

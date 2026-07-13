@@ -35,12 +35,18 @@ from retriever.batching import (  # noqa: E402
     SentinelQueryDataset,
 )
 from retriever.provenance import (  # noqa: E402
+    EXPECTED_BASE_TRAINING_IMAGE,
+    EXPECTED_DERIVED_TRAINING_IMAGE,
+    EXPECTED_DERIVED_TRAINING_IMAGE_CONTRACT_SHA256,
+    EXPECTED_DERIVED_TRAINING_IMAGE_RUNTIME_INVENTORY_SHA256,
     EXPECTED_RUNTIME_VERSIONS,
     EXPECTED_SNAPSHOT_TREE_SHA256,
+    EXPECTED_TRAINING_BOOTSTRAP_PROTOCOL,
     load_snapshot_manifest,
     validate_preimport_environment,
     validate_runtime_versions,
     validate_snapshot_directory,
+    validate_training_image_environment,
 )
 
 
@@ -226,6 +232,49 @@ class ProvenanceValidationTest(unittest.TestCase):
             os.environ["TOKENIZERS_PARALLELISM"] = "False"
             with self.assertRaisesRegex(RuntimeError, "not exact"):
                 validate_preimport_environment(17)
+
+    def test_training_image_environment_binds_derived_and_base_identities(self) -> None:
+        source_sha256 = "a" * 64
+        source_name = f"source-{source_sha256}.tar.gz"
+        exact = {
+            "ARR_TRAINING_IMAGE_URI": EXPECTED_DERIVED_TRAINING_IMAGE,
+            "ARR_TRAINING_BASE_IMAGE_URI": EXPECTED_BASE_TRAINING_IMAGE,
+            "ARR_TRAINING_IMAGE_RUNTIME_INVENTORY_SHA256": (
+                EXPECTED_DERIVED_TRAINING_IMAGE_RUNTIME_INVENTORY_SHA256
+            ),
+            "ARR_SOURCE_BUNDLE_NAME": source_name,
+            "ARR_SOURCE_BUNDLE_SIZE": "12345",
+            "ARR_SOURCE_BUNDLE_SHA256": source_sha256,
+            "ARR_SOURCE_INVENTORY_SHA256": "b" * 64,
+            "ARR_SOURCE_COMMIT_EPOCH": "1700000000",
+            "ARR_VERIFIED_SOURCE_BUNDLE_NAME": source_name,
+            "ARR_VERIFIED_SOURCE_BUNDLE_SIZE": "12345",
+            "ARR_VERIFIED_SOURCE_BUNDLE_SHA256": source_sha256,
+            "ARR_VERIFIED_SOURCE_INVENTORY_SHA256": "b" * 64,
+            "ARR_VERIFIED_SOURCE_COMMIT_EPOCH": "1700000000",
+            "ARR_VERIFIED_TRAINING_BOOTSTRAP_PROTOCOL": (
+                EXPECTED_TRAINING_BOOTSTRAP_PROTOCOL
+            ),
+            "ARR_VERIFIED_TRAINING_CONTRACT_SHA256": (
+                EXPECTED_DERIVED_TRAINING_IMAGE_CONTRACT_SHA256
+            ),
+            "ARR_VERIFIED_TRAINING_RUNTIME_INVENTORY_SHA256": (
+                EXPECTED_DERIVED_TRAINING_IMAGE_RUNTIME_INVENTORY_SHA256
+            ),
+            "ARR_TRAINING_PLAN_SHA256": "c" * 64,
+            "ARR_TRAINING_STAGING_RECEIPT_SHA256": "d" * 64,
+        }
+        with mock.patch.dict(os.environ, exact, clear=True):
+            identity = validate_training_image_environment()
+            self.assertEqual(identity["source_bundle"]["sha256"], source_sha256)
+            self.assertEqual(identity["source_bundle"]["size"], 12_345)
+            for key in exact:
+                with self.subTest(key=key):
+                    changed = dict(exact)
+                    changed[key] = "changed"
+                    with mock.patch.dict(os.environ, changed, clear=True):
+                        with self.assertRaises(RuntimeError):
+                            validate_training_image_environment()
 
     def test_frozen_snapshot_manifest_is_canonical_and_exact(self) -> None:
         manifest = load_snapshot_manifest(SNAPSHOT_MANIFEST)

@@ -263,15 +263,24 @@ manifest digest. Rebuild the two accepted replicas only with:
 
 Both metadata paths must be absent. Each invocation uses `--pull --no-cache`,
 the Docker image exporter with timestamp rewriting and no unpack, and the
-recorded Step-8 epoch. It accepts only manifest `78221762...` and config
-`aff8c9ca...`; a different rebuild is a hard failure, not a replacement image.
+recorded source epoch. It accepts only manifest `b44c9b18...` and config
+`24784672...`; a different rebuild is a hard failure, not a replacement image.
+
+The derived image also bakes a read-only trusted bootstrap. With network
+isolation enabled, SageMaker mounts the normalized source archive as a File-mode
+`source` channel rather than asking the training toolkit to download code. Each
+MPI rank independently verifies the requested archive name, size, SHA-256,
+normalized tar inventory, commit epoch, runtime contract, and active bootstrap
+bytes before extracting into a new rank-local directory and executing the
+verified `train_sm.py`. Caller-provided environment values are treated only as
+requests; the controlled entry point accepts the corresponding provenance only
+after the baked bootstrap has re-emitted independently verified identities.
 
 The Step-9 `retrieval_cv_training_plan` is intentionally non-submittable. The
-current Step-8 training source records the base DLC identity in controlled
-artifacts, while the actual future job must record both the derived training
-image digest/runtime inventory and that base identity. The planned two-epoch
-determinism and corrected-data legacy records also have no executable strict
-entry point yet, and logical snake-case hyperparameters still require an exact
-hyphenated SageMaker CLI rendering contract. These gates must be implemented
+current source records the derived image digest, runtime inventory, image
+contract, base DLC identity, verified source bundle, and launch-receipt hashes
+in controlled artifacts. The planned two-epoch determinism and corrected-data
+legacy records still have no executable strict entry point. Those remaining
+gates and the final remote submission/verification boundary must be implemented
 and re-frozen before any training job is submitted; the evaluation-image
 Processing runtime smoke does not waive them.

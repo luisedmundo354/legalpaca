@@ -29,11 +29,22 @@ EXPECTED_RUNTIME_VERSIONS = {
     "py-cpuinfo": "9.0.0",
 }
 
-EXPECTED_TRAINING_IMAGE = (
+EXPECTED_BASE_TRAINING_IMAGE = (
     "763104351884.dkr.ecr.us-east-1.amazonaws.com/"
     "huggingface-pytorch-training@"
     "sha256:e6ad17f88da21a7dc1347e68a2009a23827ca24fffdc03226095f46d0e9e53c9"
 )
+EXPECTED_DERIVED_TRAINING_IMAGE = (
+    "371087393859.dkr.ecr.us-east-1.amazonaws.com/arr-retrieval-eval@"
+    "sha256:b44c9b182a2490329b25394568299420bcfbe85a8fb17df955378b1f3630d9be"
+)
+EXPECTED_DERIVED_TRAINING_IMAGE_RUNTIME_INVENTORY_SHA256 = (
+    "1151907eb4c0c63a6a317ae11b909ceb7bbbe29d4a56c46d8bec91d8424d795c"
+)
+EXPECTED_DERIVED_TRAINING_IMAGE_CONTRACT_SHA256 = (
+    "db4b2b307a56686054c2c04fbcebf5c133077765074ceef61a613c183a4b04ef"
+)
+EXPECTED_TRAINING_BOOTSTRAP_PROTOCOL = "arr_retrieval_training_source_bootstrap_v1"
 EXPECTED_SNAPSHOT_TREE_SHA256 = (
     "aca85feea4adb60c4b021eb1a439aff47c844495005f2acdee1baef9d611d63d"
 )
@@ -152,6 +163,10 @@ EXPECTED_VALIDATION_IDENTITY_BY_CELL = {
     },
 }
 
+
+def _is_sha256(value: object) -> bool:
+    return type(value) is str and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
 _LOWER_SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
@@ -223,6 +238,114 @@ def validate_preimport_environment(experiment_seed: int) -> None:
             "Required pre-import deterministic/offline environment is not exact: "
             f"{mismatched}"
         )
+
+
+def validate_training_image_environment() -> dict[str, Any]:
+    expected = {
+        "ARR_TRAINING_IMAGE_URI": EXPECTED_DERIVED_TRAINING_IMAGE,
+        "ARR_TRAINING_BASE_IMAGE_URI": EXPECTED_BASE_TRAINING_IMAGE,
+        "ARR_TRAINING_IMAGE_RUNTIME_INVENTORY_SHA256": (
+            EXPECTED_DERIVED_TRAINING_IMAGE_RUNTIME_INVENTORY_SHA256
+        ),
+    }
+    mismatched = {
+        name: {"expected": value, "actual": os.environ.get(name)}
+        for name, value in expected.items()
+        if os.environ.get(name) != value
+    }
+    if mismatched:
+        raise RuntimeError(
+            "Training image provenance environment is not exact: "
+            f"{mismatched}"
+        )
+    verified_pairs = {
+        "name": ("ARR_SOURCE_BUNDLE_NAME", "ARR_VERIFIED_SOURCE_BUNDLE_NAME"),
+        "size": ("ARR_SOURCE_BUNDLE_SIZE", "ARR_VERIFIED_SOURCE_BUNDLE_SIZE"),
+        "sha256": ("ARR_SOURCE_BUNDLE_SHA256", "ARR_VERIFIED_SOURCE_BUNDLE_SHA256"),
+        "inventory_sha256": (
+            "ARR_SOURCE_INVENTORY_SHA256",
+            "ARR_VERIFIED_SOURCE_INVENTORY_SHA256",
+        ),
+        "commit_epoch": (
+            "ARR_SOURCE_COMMIT_EPOCH",
+            "ARR_VERIFIED_SOURCE_COMMIT_EPOCH",
+        ),
+    }
+    source = {
+        name: os.environ.get(requested)
+        for name, (requested, verified) in verified_pairs.items()
+        if os.environ.get(requested) == os.environ.get(verified)
+    }
+    if set(source) != set(verified_pairs):
+        changed = {
+            name: {
+                "requested": os.environ.get(requested),
+                "verified": os.environ.get(verified),
+            }
+            for name, (requested, verified) in verified_pairs.items()
+            if os.environ.get(requested) != os.environ.get(verified)
+        }
+        raise RuntimeError(f"Verified source bootstrap identity changed: {changed}")
+    source_name = source["name"]
+    source_sha256 = source["sha256"]
+    source_inventory_sha256 = source["inventory_sha256"]
+    if (
+        type(source_name) is not str
+        or type(source_sha256) is not str
+        or source_name != f"source-{source_sha256}.tar.gz"
+        or not _is_sha256(source_sha256)
+        or not _is_sha256(source_inventory_sha256)
+    ):
+        raise RuntimeError("Verified source bundle name/hash/inventory is invalid")
+    for name in ("size", "commit_epoch"):
+        value = source[name]
+        if (
+            type(value) is not str
+            or not value.isascii()
+            or not value.isdecimal()
+            or value.startswith("0")
+            or int(value) < 1
+        ):
+            raise RuntimeError(f"Verified source {name} is not a positive canonical integer")
+    verified_runtime = {
+        "ARR_VERIFIED_TRAINING_BOOTSTRAP_PROTOCOL": (
+            EXPECTED_TRAINING_BOOTSTRAP_PROTOCOL
+        ),
+        "ARR_VERIFIED_TRAINING_CONTRACT_SHA256": (
+            EXPECTED_DERIVED_TRAINING_IMAGE_CONTRACT_SHA256
+        ),
+        "ARR_VERIFIED_TRAINING_RUNTIME_INVENTORY_SHA256": (
+            EXPECTED_DERIVED_TRAINING_IMAGE_RUNTIME_INVENTORY_SHA256
+        ),
+    }
+    changed_runtime = {
+        name: {"expected": value, "actual": os.environ.get(name)}
+        for name, value in verified_runtime.items()
+        if os.environ.get(name) != value
+    }
+    if changed_runtime:
+        raise RuntimeError(
+            f"Verified training bootstrap/runtime identity changed: {changed_runtime}"
+        )
+    plan_sha256 = os.environ.get("ARR_TRAINING_PLAN_SHA256")
+    staging_sha256 = os.environ.get("ARR_TRAINING_STAGING_RECEIPT_SHA256")
+    if not _is_sha256(plan_sha256) or not _is_sha256(staging_sha256):
+        raise RuntimeError("Training plan/staging receipt identity is not lowercase SHA-256")
+    return {
+        "bootstrap_protocol": EXPECTED_TRAINING_BOOTSTRAP_PROTOCOL,
+        "source_bundle": {
+            "commit_epoch": int(source["commit_epoch"]),
+            "inventory_sha256": source_inventory_sha256,
+            "name": source_name,
+            "sha256": source_sha256,
+            "size": int(source["size"]),
+        },
+        "training_image_contract_sha256": (
+            EXPECTED_DERIVED_TRAINING_IMAGE_CONTRACT_SHA256
+        ),
+        "training_plan_sha256": plan_sha256,
+        "training_staging_receipt_sha256": staging_sha256,
+    }
 
 
 def load_snapshot_manifest(path: Path) -> dict[str, Any]:

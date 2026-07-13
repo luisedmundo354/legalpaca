@@ -19,16 +19,16 @@ EXPECTED_TOOLCHAIN = {
 }
 EXPECTED_MEDIA_TYPE = "application/vnd.docker.distribution.manifest.v2+json"
 EXPECTED_CONFIG_DIGEST = (
-    "sha256:aff8c9ca06b1a2aa8c78480cc8c27476eb32761176efe244eb5563dc37cfc9ad"
+    "sha256:24784672e3d1f8004fe6577069d6f01393239310276a570f5e8d0db1fe13b85f"
 )
 EXPECTED_MANIFEST_DIGEST = (
-    "sha256:78221762d9cc7dd24a3f9958f1caabfe6d06eb5668fe82d5055038b803291712"
+    "sha256:b44c9b182a2490329b25394568299420bcfbe85a8fb17df955378b1f3630d9be"
 )
 EXPECTED_RUNTIME_INVENTORY_SHA256 = (
-    "a35fd4c0cfeba0cfd9fb786833e497918b0b74afb35f583cf1b6c37fb6ce4998"
+    "1151907eb4c0c63a6a317ae11b909ceb7bbbe29d4a56c46d8bec91d8424d795c"
 )
 EXPECTED_TRAINING_CONTRACT_SHA256 = (
-    "6df440464cb8a317b2703e885f1efc8431edfdf16a29f729aef4f62c36fbfe09"
+    "db4b2b307a56686054c2c04fbcebf5c133077765074ceef61a613c183a4b04ef"
 )
 EXPECTED_SOURCE_PARENT = {
     "commit": "b02aa697310c1512fc421d7e4c6c2f81d35ec2e7",
@@ -232,7 +232,7 @@ def render_build_command(
     replica = identity["replicas"][build_replica - 1]
     if replica.get("build_replica") != build_replica:
         raise ValueError("Training build replica order changed")
-    image_name = f"arr-retrieval-train:step8-parent-build{build_replica}"
+    image_name = f"arr-retrieval-train:step10a-bootstrap-build{build_replica}"
     output = ",".join(
         (
             "type=image",

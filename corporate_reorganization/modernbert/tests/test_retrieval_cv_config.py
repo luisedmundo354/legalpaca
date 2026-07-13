@@ -134,11 +134,11 @@ class CanonicalConfigTest(unittest.TestCase):
         tracked, digest = config.load_scientific_config(path)
         self.assertEqual(
             digest,
-            "3011032dd33cc1ae3491934397242c208c7dff3df0ad38761a69da179e6dbe56",
+            "dc410bd8cf0e707644bd21097a7ebd719cec875d706ef1790d114ae39e2427b0",
         )
         self.assertEqual(
             tracked["study"]["training_image_digest"],
-            "sha256:78221762d9cc7dd24a3f9958f1caabfe6d06eb5668fe82d5055038b803291712",
+            "sha256:b44c9b182a2490329b25394568299420bcfbe85a8fb17df955378b1f3630d9be",
         )
         self.assertEqual(
             tracked["study"]["evaluation_image_digest"],

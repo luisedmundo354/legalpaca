@@ -456,12 +456,15 @@ class AwsOneShotFlowTest(unittest.TestCase):
         import hashlib
 
         checksum = base64.b64encode(hashlib.sha256(body).digest()).decode("ascii")
+        etag = f'"{hashlib.md5(body, usedforsecurity=False).hexdigest()}"'
         s3.put_object.return_value = {
+            "ETag": etag,
             "VersionId": "version-1",
             "ServerSideEncryption": "AES256",
             "ChecksumSHA256": checksum,
         }
         s3.head_object.return_value = {
+            "ETag": etag,
             "VersionId": "version-1",
             "ContentLength": len(body),
             "ServerSideEncryption": "AES256",
@@ -469,7 +472,7 @@ class AwsOneShotFlowTest(unittest.TestCase):
             "Metadata": {"sha256": hashlib.sha256(body).hexdigest()},
         }
         response_body = Mock()
-        response_body.read.return_value = body
+        response_body.read.side_effect = [body, b""]
         s3.get_object.return_value = {"Body": response_body}
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "source.tar.gz"
@@ -479,13 +482,16 @@ class AwsOneShotFlowTest(unittest.TestCase):
                 source_path=path,
                 bucket="ir-sagemaker",
                 key="arr-retrieval-cv/commit/inputs/source.tar.gz",
+                expected_bucket_owner=ACCOUNT,
             )
         self.assertEqual(receipt["version_id"], "version-1")
+        self.assertEqual(receipt["etag"], etag)
         self.assertEqual(receipt["sha256"], hashlib.sha256(body).hexdigest())
         self.assertEqual(s3.put_object.call_count, 1)
         self.assertEqual(s3.put_object.call_args.kwargs["IfNoneMatch"], "*")
         s3.get_object.assert_called_once_with(
             Bucket="ir-sagemaker",
+            ExpectedBucketOwner=ACCOUNT,
             Key="arr-retrieval-cv/commit/inputs/source.tar.gz",
             VersionId="version-1",
         )
@@ -493,6 +499,9 @@ class AwsOneShotFlowTest(unittest.TestCase):
     def test_unused_prefix_checks_versions_and_delete_markers(self) -> None:
         s3 = Mock()
         s3.list_object_versions.return_value = {
+            "Name": "ir-sagemaker",
+            "Prefix": "arr-retrieval-cv/commit/",
+            "MaxKeys": 2,
             "Versions": [],
             "DeleteMarkers": [],
             "IsTruncated": False,
@@ -501,6 +510,7 @@ class AwsOneShotFlowTest(unittest.TestCase):
             s3,
             bucket="ir-sagemaker",
             prefix="arr-retrieval-cv/commit/",
+            expected_bucket_owner=ACCOUNT,
         )
         s3.list_object_versions.return_value["DeleteMarkers"] = [{"Key": "old"}]
         with self.assertRaises(FileExistsError):
@@ -508,7 +518,12 @@ class AwsOneShotFlowTest(unittest.TestCase):
                 s3,
                 bucket="ir-sagemaker",
                 prefix="arr-retrieval-cv/commit/",
+                expected_bucket_owner=ACCOUNT,
             )
+        self.assertEqual(
+            s3.list_object_versions.call_args_list[0].kwargs["ExpectedBucketOwner"],
+            ACCOUNT,
+        )
 
 
 if __name__ == "__main__":

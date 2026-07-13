@@ -17,11 +17,14 @@ from retriever.provenance import (
     EXPECTED_PASSAGE_INDEX_SHA256,
     EXPECTED_RUNTIME_VERSIONS,
     EXPECTED_SNAPSHOT_TREE_SHA256,
-    EXPECTED_TRAINING_IMAGE,
+    EXPECTED_BASE_TRAINING_IMAGE,
+    EXPECTED_DERIVED_TRAINING_IMAGE,
+    EXPECTED_DERIVED_TRAINING_IMAGE_RUNTIME_INVENTORY_SHA256,
     load_snapshot_manifest,
     validate_preimport_environment,
     validate_runtime_versions,
     validate_snapshot_directory,
+    validate_training_image_environment,
 )
 from retriever.sampling import (
     SAMPLER_GLOBAL_UNIFORM,
@@ -509,7 +512,7 @@ def _validate_experiment_config(
         "region": "us-east-1",
         "sagemaker_base_model_channel": "base_model",
         "sagemaker_sdk_version": "2.248.2",
-        "training_image": EXPECTED_TRAINING_IMAGE,
+        "training_image": EXPECTED_BASE_TRAINING_IMAGE,
     }
     if type(aws_training) is not dict:
         raise TypeError("Experiment aws_training section must be an object")
@@ -854,6 +857,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         deepspeed_config_path=args.deepspeed_config,
     )
     validate_preimport_environment(args.experiment_seed)
+    training_launch_provenance = validate_training_image_environment()
     validate_runtime_versions()
 
     import numpy
@@ -1351,7 +1355,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             "sampler": args.sampler,
             "experiment_seed": args.experiment_seed,
             "runtime_versions": EXPECTED_RUNTIME_VERSIONS,
-            "training_image": EXPECTED_TRAINING_IMAGE,
+            "training_image": EXPECTED_DERIVED_TRAINING_IMAGE,
+            "training_base_image": EXPECTED_BASE_TRAINING_IMAGE,
+            "training_image_runtime_inventory_sha256": (
+                EXPECTED_DERIVED_TRAINING_IMAGE_RUNTIME_INVENTORY_SHA256
+            ),
+            "training_image_contract_sha256": training_launch_provenance[
+                "training_image_contract_sha256"
+            ],
+            "training_bootstrap_protocol": training_launch_provenance[
+                "bootstrap_protocol"
+            ],
+            "training_plan_sha256": training_launch_provenance[
+                "training_plan_sha256"
+            ],
+            "training_staging_receipt_sha256": training_launch_provenance[
+                "training_staging_receipt_sha256"
+            ],
+            "source_bundle": training_launch_provenance["source_bundle"],
             "experiment_config": {
                 "path": "experiment.json",
                 "sha256": _sha256(args.experiment_config),

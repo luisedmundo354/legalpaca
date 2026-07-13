@@ -67,7 +67,7 @@ def _valid_plan() -> dict[str, object]:
     role = fold_manifest["rotations"][0]["test"]
     passage_index = PassageIndexTable(load_corpus(DATASET_DIR))
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "experiment_id": "arr_retrieval_cv_v1",
         "outer_fold": 0,
         "role": "test",
@@ -90,6 +90,13 @@ def _valid_plan() -> dict[str, object]:
                 "query_view": "flat_masked",
                 "artifact_expectation": {
                     "artifact_manifest_sha256": "a" * 64,
+                    "training_plan_sha256": "1" * 64,
+                    "training_staging_receipt_sha256": "2" * 64,
+                    "source_bundle_name": f"source-{'3' * 64}.tar.gz",
+                    "source_bundle_size": 12_345,
+                    "source_bundle_sha256": "3" * 64,
+                    "source_bundle_inventory_sha256": "4" * 64,
+                    "source_bundle_commit_epoch": 1_700_000_000,
                     "experiment_id": "arr_retrieval_cv_v1",
                     "outer_fold": 0,
                     "query_view": "flat_masked",
@@ -175,6 +182,38 @@ class ControlledEvaluationPlanTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "not canonical"):
             _validate_controlled_evaluation_plan(
                 noncanonical_view,
+                evaluation_plan_sha256="f" * 64,
+            )
+
+        mixed_source = copy.deepcopy(self.plan)
+        second = copy.deepcopy(mixed_source["systems"][0])
+        second["system_id"] = "structured_local_seed17"
+        second["query_view"] = "structured"
+        second["artifact_expectation"]["artifact_manifest_sha256"] = "b" * 64
+        second["artifact_expectation"]["query_view"] = "structured"
+        second["artifact_expectation"]["source_bundle_sha256"] = "5" * 64
+        second["artifact_expectation"]["source_bundle_name"] = (
+            f"source-{'5' * 64}.tar.gz"
+        )
+        mixed_source["systems"].append(second)
+        with self.assertRaisesRegex(ValueError, "mixes controlled launch"):
+            _validate_controlled_evaluation_plan(
+                mixed_source,
+                evaluation_plan_sha256="f" * 64,
+            )
+
+        mixed_ledger = copy.deepcopy(self.plan)
+        second = copy.deepcopy(mixed_ledger["systems"][0])
+        second["system_id"] = "structured_local_seed17"
+        second["query_view"] = "structured"
+        second["artifact_expectation"]["artifact_manifest_sha256"] = "b" * 64
+        second["artifact_expectation"]["query_view"] = "structured"
+        second["artifact_expectation"]["training_plan_sha256"] = "5" * 64
+        second["artifact_expectation"]["training_staging_receipt_sha256"] = "6" * 64
+        mixed_ledger["systems"].append(second)
+        with self.assertRaisesRegex(ValueError, "mixes controlled launch"):
+            _validate_controlled_evaluation_plan(
+                mixed_ledger,
                 evaluation_plan_sha256="f" * 64,
             )
 

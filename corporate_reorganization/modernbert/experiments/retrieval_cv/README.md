@@ -261,25 +261,54 @@ Step-2-frozen experiment specification.
 - aws.py uses low-level, one-attempt Botocore clients for immutable ECR
   publication, checked versioned-S3 primitives, Processing preflight, and one
   explicitly submitted runtime smoke. It never retries or selects a fallback.
+- training_aws.py is a deliberately non-submitting training foundation. It
+  validates and stages exactly one source bundle, six corrected-v2 data files,
+  and five ModernBERT snapshot files under previously unused versioned
+  prefixes; records every VersionId, ETag, size, SHA-256, and SSE setting; and
+  rejects delete markers, extra versions, or non-current objects. It renders a
+  controlled CreateTrainingJob request only from one validated plan cell and
+  the matching staging receipt. The pinned training-toolkit 5.0.0 mapping is
+  explicit: scientific snake_case plan keys become the hyphenated strict CLI
+  flags consumed by the image-baked bootstrap and then by train_sm.py. The
+  request uses three slash-bounded File-mode channels (`base_model`, `data`,
+  and `source`) under network isolation. Every MPI rank verifies the mounted
+  source archive and its normalized inventory before safe rank-local extraction;
+  no container-side S3 download is permitted.
+- Controlled artifact expectations and exported model identities carry the
+  exact plan SHA-256, staging-receipt SHA-256, and five-field source-bundle
+  identity in addition to the derived/base image, runtime, contract, and
+  bootstrap identities. Evaluation plans must obtain those dynamic values from
+  the independently validated plan, staging receipt, and re-rendered per-run
+  request receipt, never from the artifact's own `controlled_run.json`. The
+  local and complete evaluation-plan schemas are versions 2 and 3 respectively,
+  and each plan requires one common plan hash, staging-receipt hash, and source
+  bundle across all of its controlled systems.
 - aggregate.py performs only strict five-fold completeness and artifact
   readback. Statistical aggregation, intervals, contrasts, and figures remain
   Step 12.
 
-The Step-9 training manifest is deliberately
+The committed Step-9 training manifest is deliberately
 `retrieval_cv_training_plan`, not a launch manifest. It is hard-blocked and
-cannot be submitted. Its exact blockers are: controlled artifacts still record
-only the base DLC rather than both derived/base image identities; the separate
-2-epoch/6-update determinism entry point and validator do not yet exist; the
-legacy adapter cannot consume corrected-v2 `queries/all.jsonl` and has no
-strict artifact protocol; and SageMaker scientific keys have not yet been
-rendered to the hyphenated CLI spellings accepted by `train_sm.py`. Those are
-implementation gates for the next commits, not implicit behavior or fallbacks.
+cannot be submitted. This implementation commit adds derived/base/runtime
+image provenance to controlled artifacts and the exact controlled request and
+staging renderer, but it intentionally does not make the old plan submittable:
+the separate 2-epoch/6-update determinism entry point and validator and the
+corrected-data legacy-style diagnostic still need their own strict entry
+points, artifact protocols, and request schemas. After those implementations
+are committed, a later source-freeze commit must repin the source commit/tree,
+rebuild the plan, clear only genuinely discharged blockers, and add remote
+preflight/re-render/Describe verification before any submission is exposed.
+These are explicit implementation gates, not implicit behavior or fallbacks.
 The immediate Processing runtime smoke is independent of this blocked plan.
-The S3 helpers are not yet a training-staging coordinator: before training,
-one operation must validate the bucket, prove the complete versioned prefix
-has never contained an object or delete marker, stage every object, and bind
-each VersionId and readback hash into launch evidence. `If-None-Match` alone is
-not treated as historical-prefix immutability.
+The training staging coordinator has not been invoked. Before training, its
+single operation validates the bucket, proves all three complete versioned
+prefixes have never contained an object or delete marker, stages all twelve
+objects, and binds every VersionId and readback identity into one receipt.
+Immediately before a later submission, the launcher must re-list the complete
+version history and deeply re-read the named versions. `If-None-Match` alone is
+not treated as historical-prefix immutability. A partial staging failure
+permanently taints that prefix and fails; it is never cleaned up or retried in
+place.
 
 The immediate Processing smoke is
 `evaluation_image_runtime_smoke_v1`. It validates account-local digest pull,
