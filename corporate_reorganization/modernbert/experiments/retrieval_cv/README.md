@@ -363,9 +363,28 @@ Step-2-frozen experiment specification.
   VersionIds, archive hashes, tree inventories, and artifact identities. It
   has no loose-root or user-supplied manifest-hash interface. Neither module
   submits a job.
-- aggregate.py performs only strict five-fold completeness and artifact
-  readback. Statistical aggregation, intervals, contrasts, and figures remain
-  Step 12.
+- `aggregate.py` performs strict five-fold completeness and artifact readback.
+  `analysis.py` and `reporting.py` implement the separate Step-12 layer. The
+  `analyze` command requires exactly five completed acquisition directories,
+  five matching terminal receipts, the corrected staged dataset, and the
+  frozen experiment and fold manifests. It revalidates every local/S3
+  identity, invokes the strict five-fold readback, streams each canonical
+  ranking line, independently
+  recomputes its multi-positive metrics, and fails on any stored-metric or
+  coverage disagreement.
+- Step 12 averages queries within held-out case, averages matched seeds
+  17/29/43 within case, and only then averages the 42 cases. The primary five
+  contrasts use 10,000 paired case resamples with analysis seed 17 and 95%
+  linear-percentile intervals. Seed-specific contrasts and their sample SD are
+  reported separately; paired case/seed resampling is labeled as a sensitivity
+  analysis. The primary endpoint remains case-macro Hit@20 under `fold_global`.
+- The atomic analysis output contains compact query/case/cell/seed CSV tables,
+  the five contrast table, machine-readable summary and provenance, a generated
+  report, deterministic SVG figures, and byte-exact copies of all five files
+  in the corrected dataset after validation against `dataset_manifest.json`.
+  `rankings_manifest.json` records each raw ranking's exact S3 key, VersionId,
+  size, and SHA-256. It intentionally does not duplicate the multi-gigabyte
+  ranking files or any trained model.
 
 The ready manifest remains `retrieval_cv_training_plan`: readiness permits only
 the sealed coordinator above and does not itself stage or submit anything. The

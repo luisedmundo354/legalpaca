@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="520" viewBox="0 0 880 520">
+<title>Case-first Hit at K curves</title>
+<rect width="100%" height="100%" fill="#ffffff"/>
+<style>text{font-family:Arial,Helvetica,sans-serif;fill:#172033}.title{font-size:18px;font-weight:700}.axis{font-size:11px}.label{font-size:12px}.note{font-size:10px;fill:#526071}</style>
+<text x="24" y="30" class="title">Case-first Hit@K by representation and sampler</text>
+<line x1="72" y1="438.00" x2="610" y2="438.00" stroke="#e2e8f0"/>
+<text x="62" y="442.00" text-anchor="end" class="axis">0.0</text>
+<line x1="72" y1="362.00" x2="610" y2="362.00" stroke="#e2e8f0"/>
+<text x="62" y="366.00" text-anchor="end" class="axis">0.2</text>
+<line x1="72" y1="286.00" x2="610" y2="286.00" stroke="#e2e8f0"/>
+<text x="62" y="290.00" text-anchor="end" class="axis">0.4</text>
+<line x1="72" y1="210.00" x2="610" y2="210.00" stroke="#e2e8f0"/>
+<text x="62" y="214.00" text-anchor="end" class="axis">0.6</text>
+<line x1="72" y1="134.00" x2="610" y2="134.00" stroke="#e2e8f0"/>
+<text x="62" y="138.00" text-anchor="end" class="axis">0.8</text>
+<line x1="72" y1="58.00" x2="610" y2="58.00" stroke="#e2e8f0"/>
+<text x="62" y="62.00" text-anchor="end" class="axis">1.0</text>
+<text x="72.00" y="460" text-anchor="middle" class="axis">1</text>
+<text x="251.33" y="460" text-anchor="middle" class="axis">5</text>
+<text x="430.67" y="460" text-anchor="middle" class="axis">10</text>
+<text x="610.00" y="460" text-anchor="middle" class="axis">20</text>
+<polyline points="72.00,435.13 251.33,423.92 430.67,403.74 610.00,378.78" fill="none" stroke="#06b6d4" stroke-width="3"/>
+<circle cx="72.00" cy="435.13" r="4" fill="#06b6d4"/>
+<circle cx="251.33" cy="423.92" r="4" fill="#06b6d4"/>
+<circle cx="430.67" cy="403.74" r="4" fill="#06b6d4"/>
+<circle cx="610.00" cy="378.78" r="4" fill="#06b6d4"/>
+<line x1="650" y1="90" x2="682" y2="90" stroke="#06b6d4" stroke-width="4"/>
+<text x="692" y="94" class="label">flat_masked / global_uniform</text>
+<polyline points="72.00,435.04 251.33,423.32 430.67,403.89 610.00,378.45" fill="none" stroke="#2563eb" stroke-width="3"/>
+<circle cx="72.00" cy="435.04" r="4" fill="#2563eb"/>
+<circle cx="251.33" cy="423.32" r="4" fill="#2563eb"/>
+<circle cx="430.67" cy="403.89" r="4" fill="#2563eb"/>
+<circle cx="610.00" cy="378.45" r="4" fill="#2563eb"/>
+<line x1="650" y1="122" x2="682" y2="122" stroke="#2563eb" stroke-width="4"/>
+<text x="692" y="126" class="label">flat_masked / local_unique</text>
+<polyline points="72.00,432.79 251.33,423.79 430.67,410.51 610.00,387.76" fill="none" stroke="#f59e0b" stroke-width="3"/>
+<circle cx="72.00" cy="432.79" r="4" fill="#f59e0b"/>
+<circle cx="251.33" cy="423.79" r="4" fill="#f59e0b"/>
+<circle cx="430.67" cy="410.51" r="4" fill="#f59e0b"/>
+<circle cx="610.00" cy="387.76" r="4" fill="#f59e0b"/>
+<line x1="650" y1="154" x2="682" y2="154" stroke="#f59e0b" stroke-width="4"/>
+<text x="692" y="158" class="label">structured / global_uniform</text>
+<polyline points="72.00,432.82 251.33,422.55 430.67,409.28 610.00,388.61" fill="none" stroke="#dc2626" stroke-width="3"/>
+<circle cx="72.00" cy="432.82" r="4" fill="#dc2626"/>
+<circle cx="251.33" cy="422.55" r="4" fill="#dc2626"/>
+<circle cx="430.67" cy="409.28" r="4" fill="#dc2626"/>
+<circle cx="610.00" cy="388.61" r="4" fill="#dc2626"/>
+<line x1="650" y1="186" x2="682" y2="186" stroke="#dc2626" stroke-width="4"/>
+<text x="692" y="190" class="label">structured / local_unique</text>
+<text x="341.0" y="492" text-anchor="middle" class="axis">K</text>
+<text x="18" y="248.0" transform="rotate(-90 18 248.0)" text-anchor="middle" class="axis">Case-macro hit rate</text>
+<text x="650" y="235" class="note">Queries averaged within case;</text>
+<text x="650" y="251" class="note">seeds averaged within case;</text>
+<text x="650" y="267" class="note">then 42 cases averaged.</text>
+</svg>

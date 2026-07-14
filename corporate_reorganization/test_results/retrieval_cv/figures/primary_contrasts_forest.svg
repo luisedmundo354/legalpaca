@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="460" viewBox="0 0 980 460">
+<title>Primary retrieval contrast forest plot</title>
+<rect width="100%" height="100%" fill="#ffffff"/>
+<style>text{font-family:Arial,Helvetica,sans-serif;fill:#172033}.title{font-size:18px;font-weight:700}.axis{font-size:11px}.label{font-size:12px}.note{font-size:10px;fill:#526071}</style>
+<text x="24" y="30" class="title">Primary paired case contrasts (Hit@20, fold-global)</text>
+<line x1="743.25" y1="50" x2="743.25" y2="405" stroke="#7b8794" stroke-dasharray="4 4"/>
+<text x="24" y="76" class="label">Flat: global-uniform minus local-unique</text>
+<line x1="655.36" y1="84" x2="828.33" y2="84" stroke="#94a3b8" stroke-width="3"/>
+<line x1="672.41" y1="72" x2="805.41" y2="72" stroke="#1f4e79" stroke-width="4"/>
+<circle cx="739.04" cy="72" r="5" fill="#1f4e79"/>
+<text x="24" y="138" class="label">Structured: global-uniform minus local-unique</text>
+<line x1="681.41" y1="146" x2="835.28" y2="146" stroke="#94a3b8" stroke-width="3"/>
+<line x1="693.53" y1="134" x2="820.99" y2="134" stroke="#1f4e79" stroke-width="4"/>
+<circle cx="754.10" cy="134" r="5" fill="#1f4e79"/>
+<text x="24" y="200" class="label">Local-unique: structured minus flat</text>
+<line x1="400.65" y1="208" x2="830.41" y2="208" stroke="#94a3b8" stroke-width="3"/>
+<line x1="401.85" y1="196" x2="820.97" y2="196" stroke="#1f4e79" stroke-width="4"/>
+<circle cx="614.68" cy="196" r="5" fill="#1f4e79"/>
+<text x="24" y="262" class="label">Global-uniform: structured minus flat</text>
+<line x1="448.93" y1="270" x2="813.10" y2="270" stroke="#94a3b8" stroke-width="3"/>
+<line x1="451.17" y1="258" x2="802.79" y2="258" stroke="#1f4e79" stroke-width="4"/>
+<circle cx="629.73" cy="258" r="5" fill="#1f4e79"/>
+<text x="24" y="324" class="label">Difference in structural effects (global minus local)</text>
+<line x1="653.40" y1="332" x2="864.35" y2="332" stroke="#94a3b8" stroke-width="3"/>
+<line x1="684.44" y1="320" x2="833.91" y2="320" stroke="#1f4e79" stroke-width="4"/>
+<circle cx="758.30" cy="320" r="5" fill="#1f4e79"/>
+<line x1="345.00" y1="410" x2="345.00" y2="415" stroke="#172033"/>
+<text x="345.00" y="431" text-anchor="middle" class="axis">-0.083</text>
+<line x1="460.00" y1="410" x2="460.00" y2="415" stroke="#172033"/>
+<text x="460.00" y="431" text-anchor="middle" class="axis">-0.059</text>
+<line x1="575.00" y1="410" x2="575.00" y2="415" stroke="#172033"/>
+<text x="575.00" y="431" text-anchor="middle" class="axis">-0.035</text>
+<line x1="690.00" y1="410" x2="690.00" y2="415" stroke="#172033"/>
+<text x="690.00" y="431" text-anchor="middle" class="axis">-0.011</text>
+<line x1="805.00" y1="410" x2="805.00" y2="415" stroke="#172033"/>
+<text x="805.00" y="431" text-anchor="middle" class="axis">0.013</text>
+<line x1="920.00" y1="410" x2="920.00" y2="415" stroke="#172033"/>
+<text x="920.00" y="431" text-anchor="middle" class="axis">0.037</text>
+<text x="632.50" y="452" text-anchor="middle" class="note">Dark: paired case bootstrap; gray: hierarchical case/seed sensitivity</text>
+</svg>

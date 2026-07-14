@@ -10,6 +10,7 @@ from typing import Any, Sequence
 
 from . import (
     aggregate,
+    analysis,
     aws,
     config,
     controlled_supervisor,
@@ -18,6 +19,7 @@ from . import (
     fold_processing_aws,
     folds,
     manifest,
+    reporting,
     training_artifacts,
     training_aws,
     training_launch,
@@ -227,6 +229,18 @@ def _parser() -> argparse.ArgumentParser:
     aggregate_parser.add_argument("--dataset-dir", type=Path, required=True)
     aggregate_parser.add_argument("--fold-manifest", type=Path, required=True)
     aggregate_parser.add_argument("--output", type=Path, required=True)
+
+    analyze_parser = commands.add_parser("analyze", allow_abbrev=False)
+    analyze_parser.add_argument(
+        "--acquisition-dir", type=Path, action="append", required=True
+    )
+    analyze_parser.add_argument(
+        "--terminal-receipt", type=Path, action="append", required=True
+    )
+    analyze_parser.add_argument("--dataset-dir", type=Path, required=True)
+    analyze_parser.add_argument("--fold-manifest", type=Path, required=True)
+    analyze_parser.add_argument("--experiment-config", type=Path, required=True)
+    analyze_parser.add_argument("--output-dir", type=Path, required=True)
 
     verify = commands.add_parser("verify", allow_abbrev=False)
     verify_modes = verify.add_subparsers(dest="verify_mode", required=True)
@@ -1126,6 +1140,27 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
             ),
         )
+        return 0
+    if args.command == "analyze":
+        output = _absolute(args.output_dir, name="output-dir")
+        _require_absent_output(output)
+        acquisition_dirs = [
+            _absolute(path, name="acquisition-dir") for path in args.acquisition_dir
+        ]
+        terminal_receipts = [
+            _absolute(path, name="terminal-receipt") for path in args.terminal_receipt
+        ]
+        bundle = analysis.build_analysis_bundle(
+            acquisition_dirs=acquisition_dirs,
+            terminal_receipts=terminal_receipts,
+            dataset_dir=_absolute(args.dataset_dir, name="dataset-dir"),
+            fold_manifest_path=_absolute(args.fold_manifest, name="fold-manifest"),
+            experiment_config_path=_absolute(
+                args.experiment_config,
+                name="experiment-config",
+            ),
+        )
+        reporting.publish_analysis_bundle(bundle, output_dir=output)
         return 0
     if args.command == "verify" and args.verify_mode == "training-plan":
         output = _absolute(args.output, name="output")

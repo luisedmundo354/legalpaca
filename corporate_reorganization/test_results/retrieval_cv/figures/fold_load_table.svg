@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="660" height="270" viewBox="0 0 660 270">
+<title>Held-out fold workload table</title>
+<rect width="100%" height="100%" fill="#ffffff"/>
+<style>text{font-family:Arial,Helvetica,sans-serif;fill:#172033}.title{font-size:18px;font-weight:700}.axis{font-size:11px}.label{font-size:12px}.note{font-size:10px;fill:#526071}</style>
+<text x="24" y="28" class="title">Held-out fold workload</text>
+<text x="60" y="65" text-anchor="middle" class="label">Fold</text>
+<text x="180" y="65" text-anchor="middle" class="label">Cases</text>
+<text x="285" y="65" text-anchor="middle" class="label">Queries</text>
+<text x="400" y="65" text-anchor="middle" class="label">Passages</text>
+<text x="540" y="65" text-anchor="middle" class="label">Ranking rows</text>
+<line x1="25" y1="75" x2="635" y2="75" stroke="#94a3b8"/>
+<text x="60" y="105" text-anchor="middle" class="label">0</text>
+<text x="180" y="105" text-anchor="middle" class="label">9</text>
+<text x="285" y="105" text-anchor="middle" class="label">98</text>
+<text x="400" y="105" text-anchor="middle" class="label">1054</text>
+<text x="540" y="105" text-anchor="middle" class="label">5880</text>
+<rect x="25" y="117" width="610" height="27" fill="#f8fafc"/>
+<text x="60" y="136" text-anchor="middle" class="label">1</text>
+<text x="180" y="136" text-anchor="middle" class="label">9</text>
+<text x="285" y="136" text-anchor="middle" class="label">98</text>
+<text x="400" y="136" text-anchor="middle" class="label">1060</text>
+<text x="540" y="136" text-anchor="middle" class="label">5880</text>
+<text x="60" y="167" text-anchor="middle" class="label">2</text>
+<text x="180" y="167" text-anchor="middle" class="label">8</text>
+<text x="285" y="167" text-anchor="middle" class="label">98</text>
+<text x="400" y="167" text-anchor="middle" class="label">1055</text>
+<text x="540" y="167" text-anchor="middle" class="label">5880</text>
+<rect x="25" y="179" width="610" height="27" fill="#f8fafc"/>
+<text x="60" y="198" text-anchor="middle" class="label">3</text>
+<text x="180" y="198" text-anchor="middle" class="label">8</text>
+<text x="285" y="198" text-anchor="middle" class="label">98</text>
+<text x="400" y="198" text-anchor="middle" class="label">1055</text>
+<text x="540" y="198" text-anchor="middle" class="label">5880</text>
+<text x="60" y="229" text-anchor="middle" class="label">4</text>
+<text x="180" y="229" text-anchor="middle" class="label">8</text>
+<text x="285" y="229" text-anchor="middle" class="label">98</text>
+<text x="400" y="229" text-anchor="middle" class="label">1062</text>
+<text x="540" y="229" text-anchor="middle" class="label">5880</text>
+</svg>
