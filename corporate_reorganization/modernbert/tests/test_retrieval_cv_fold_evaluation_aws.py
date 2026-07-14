@@ -136,6 +136,50 @@ def _phase2_context_kwargs() -> dict[str, object]:
 
 
 class RetrievalCvFoldEvaluationAwsTest(unittest.TestCase):
+    def test_phase2_job_name_preserves_legacy_and_canonical_run_ordinals(
+        self,
+    ) -> None:
+        for outer_fold in (0, 4):
+            completed = {"outer_fold": outer_fold, "attempt_id": "a3"}
+            base = f"arr-ret-cv1-f{outer_fold}-evaluate-a3"
+            for job_name in (base, f"{base}-r1", f"{base}-r2"):
+                with self.subTest(outer_fold=outer_fold, job_name=job_name):
+                    self.assertEqual(
+                        phase2._validate_phase2_job_name(
+                            completed=completed,
+                            job_name=job_name,
+                        ),
+                        job_name,
+                    )
+
+        completed = {"outer_fold": 0, "attempt_id": "a3"}
+        base = "arr-ret-cv1-f0-evaluate-a3"
+        invalid = (
+            None,
+            True,
+            1,
+            f"{base}-r",
+            f"{base}-r0",
+            f"{base}-r00",
+            f"{base}-r01",
+            f"{base}-r+1",
+            f"{base}-r-1",
+            f"{base}-rx",
+            f"{base}-r1-r2",
+            "arr-ret-cv1-f1-evaluate-a3-r1",
+            "arr-ret-cv1-f0-evaluate-a4-r1",
+            "valid-but-arbitrary",
+            f"{base}-r{'9' * 40}",
+        )
+        for job_name in invalid:
+            with self.subTest(job_name=job_name), self.assertRaisesRegex(
+                ValueError, "canonical positive execution ordinal"
+            ):
+                phase2._validate_phase2_job_name(
+                    completed=completed,
+                    job_name=job_name,
+                )
+
     def test_phase_publications_are_exact_and_cross_phase_rejected(self) -> None:
         old = _phase1_publication()
         new = _phase2_publication()
@@ -468,6 +512,24 @@ class RetrievalCvFoldEvaluationAwsTest(unittest.TestCase):
                 }
             ],
         )
+        suffixed = phase2._render_phase2_request(
+            completed=completed,
+            archive_copy=archive,
+            static_staging=static,
+            publication=publication,
+            phase1_preflight={
+                "output_prefix": "arr-retrieval-cv/fold-0/inventory/"
+            },
+            control_staging={
+                "input_prefix": "arr-retrieval-cv/fold-0/phase2-controls/input/"
+            },
+            job_name="arr-ret-cv1-f0-evaluate-a3-r2",
+            output_prefix="arr-retrieval-cv/fold-0/evaluation-r2/",
+        )
+        self.assertEqual(
+            suffixed["ProcessingJobName"],
+            "arr-ret-cv1-f0-evaluate-a3-r2",
+        )
         with self.assertRaisesRegex(ValueError, "fold archives"):
             phase2._render_phase2_request(
                 completed=completed,
@@ -488,7 +550,7 @@ class RetrievalCvFoldEvaluationAwsTest(unittest.TestCase):
 
     def test_phase2_submission_is_one_shot_and_persists_intent_first(self) -> None:
         clients = _clients()
-        job_name = "arr-ret-cv1-f0-evaluate-a3"
+        job_name = "arr-ret-cv1-f0-evaluate-a3-r2"
         job_arn = (
             "arn:aws:sagemaker:us-east-1:371087393859:"
             f"processing-job/{job_name}"

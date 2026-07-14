@@ -117,6 +117,7 @@ PHASE2_OUTPUT_PATHS = (
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _ETAG = re.compile(r'"[0-9a-f]{32}(?:-[1-9][0-9]*)?"\Z')
 _JOB_NAME = re.compile(r"[A-Za-z0-9](?:-*[A-Za-z0-9]){0,62}\Z")
+_PHASE2_RUN_ORDINAL = re.compile(r"[1-9][0-9]*\Z")
 
 _CONTROL_BUNDLE_KEYS = {
     "schema_version",
@@ -1447,6 +1448,33 @@ def _processing_input(*, name: str, s3_uri: str, local_path: str) -> dict[str, A
     }
 
 
+def _validate_phase2_job_name(
+    *, completed: Mapping[str, Any], job_name: object
+) -> str:
+    base = (
+        f"arr-ret-cv1-f{completed['outer_fold']}-evaluate-"
+        f"{completed['attempt_id']}"
+    )
+    valid = type(job_name) is str and (
+        job_name == base
+        or (
+            job_name.startswith(f"{base}-r")
+            and _PHASE2_RUN_ORDINAL.fullmatch(job_name.removeprefix(f"{base}-r"))
+            is not None
+        )
+    )
+    if (
+        not valid
+        or len(job_name) > 63
+        or _JOB_NAME.fullmatch(job_name) is None
+    ):
+        raise ValueError(
+            f"Phase-2 job name must equal {base} or {base}-rN with canonical "
+            "positive execution ordinal N"
+        )
+    return job_name
+
+
 def _render_phase2_request(
     *,
     completed: Mapping[str, Any],
@@ -1458,15 +1486,7 @@ def _render_phase2_request(
     job_name: str,
     output_prefix: str,
 ) -> dict[str, Any]:
-    expected_job_name = (
-        f"arr-ret-cv1-f{completed['outer_fold']}-evaluate-{completed['attempt_id']}"
-    )
-    if (
-        type(job_name) is not str
-        or _JOB_NAME.fullmatch(job_name) is None
-        or job_name != expected_job_name
-    ):
-        raise ValueError(f"Phase-2 job name must equal {expected_job_name}")
+    job_name = _validate_phase2_job_name(completed=completed, job_name=job_name)
     output_prefix = phase1._normalized_prefix(
         output_prefix, name="Phase-2 output prefix"
     )

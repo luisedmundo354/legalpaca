@@ -473,7 +473,12 @@ Every mode requires absolute local paths and absent outputs; staging, copy, and
 submission also require an absent state directory. The original Phase-1 image
 receipt and corrected Phase-2 image receipt are separate required arguments
 and cannot be substituted for each other. S3 prefixes and job names are
-one-use identities. There is no overwrite, resume, retry, cleanup,
+one-use identities. A Phase-2 job name is either the exact historical
+`arr-ret-cv1-f{fold}-evaluate-{training_attempt}` form or that exact base plus
+`-rN`, where `N` is a canonical positive execution ordinal. The failed fold-0
+base name is execution 1, its corrected execution is `-r2`, and first
+executions for later folds use `-r1`; `N` never changes the sealed training
+attempt. There is no overwrite, resume, retry, cleanup,
 reconciliation, adoption, alternate instance, or inferred default. All AWS
 clients derive their region from the recursively validated completed-fold
 training plan. Receipt inputs must be exact deterministic JSON: either the
