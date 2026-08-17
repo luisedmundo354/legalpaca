@@ -5,3 +5,5 @@ __pycache__/
 /corporate_reorganization/notebooks/.env
 /corporate_reorganization/modernbert/experiments/retrieval_cv/aws.local.json
 /corporate_reorganization/modernbert/experiments/retrieval_cv/aws_state/
+.codex
+.idea/workspace.xml
