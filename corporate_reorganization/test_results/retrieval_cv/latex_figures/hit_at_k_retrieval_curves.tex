@@ -1,0 +1,156 @@
+\begin{figure}[!htb]
+\centering
+\begin{tikzpicture}
+
+% Baseline coordinates come from case_macro_hit_at_* in system_summary.csv.
+% Controlled coordinates come from the seed-averaged case means in
+% cell_summary.csv. All coordinates below are percentages.
+\begin{groupplot}[
+  group style={
+    group size=1 by 3,
+    vertical sep=1.5cm,
+    xlabels at=edge bottom,
+    ylabels at=edge left
+  },
+  width=0.95\columnwidth,
+  height=0.8\columnwidth,
+  xmin=1, xmax=20,
+  ymin=0, ymax=85,
+  xtick={1,5,10,20},
+  ytick={0,20,40,60,80},
+  xlabel={$k$},
+  ylabel={Case-macro Hit@$k$ (\%)},
+  grid=both,
+  grid style={black!18, densely dotted},
+  tick label style={font=\footnotesize},
+  label style={font=\footnotesize},
+  title style={font=\footnotesize},
+  tick style={black!60},
+  tick align=outside,
+  scaled y ticks=false,
+  yticklabel={\pgfmathprintnumber{\tick}\%},
+  bm25/.style={black, solid, mark=triangle*, mark size=1.7pt, line width=1.0pt},
+  e5/.style={green!50!black, solid, mark=diamond*, mark size=1.7pt, line width=1.0pt},
+  mbbase/.style={black!55, dashdotted, mark=x, mark size=1.8pt, line width=0.9pt},
+  flat/.style={blue!75!black, line width=1.1pt},
+  structured/.style={red!75!black, line width=1.1pt},
+  localunique/.style={solid, mark=*, mark size=1.7pt},
+  globaluniform/.style={densely dashed, mark=square*, mark size=1.6pt},
+  random/.style={black!70, densely dotted, mark=none, line width=0.8pt}
+]
+
+\nextgroupplot[
+  title={Same-case legacy},
+  legend to name=retrievallegend,
+  legend columns=4,
+  legend cell align={left},
+  legend style={
+    draw=none,
+    fill=none,
+    font=\scriptsize,
+    column sep=0.7em,
+    /tikz/every even column/.append style={column sep=0.9em}
+  }
+]
+\addplot+[bm25] coordinates {
+  (1,13.490437) (5,42.855084) (10,58.961793) (20,73.920238)
+};
+\addlegendentry{BM25}
+\addplot+[e5] coordinates {
+  (1,7.143545) (5,33.466774) (10,52.395610) (20,68.736746)
+};
+\addlegendentry{E5}
+\addplot+[mbbase] coordinates {
+  (1,3.093625) (5,15.678915) (10,32.258002) (20,49.188498)
+};
+\addlegendentry{MB-base}
+\addplot+[random] coordinates {
+  (1,3.158718) (5,14.594552) (10,26.630947) (20,45.251496)
+};
+\addlegendentry{Random}
+\addplot+[flat,localunique] coordinates {
+  (1,14.851692) (5,43.773207) (10,63.152102) (20,80.449985)
+};
+\addlegendentry{Flat/local}
+\addplot+[flat,globaluniform] coordinates {
+  (1,13.471298) (5,43.537088) (10,63.822811) (20,79.941405)
+};
+\addlegendentry{Flat/global}
+\addplot+[structured,localunique] coordinates {
+  (1,16.852119) (5,40.877356) (10,56.991661) (20,78.431671)
+};
+\addlegendentry{Struct./local}
+\addplot+[structured,globaluniform] coordinates {
+  (1,15.961546) (5,42.053551) (10,58.349255) (20,78.501208)
+};
+\addlegendentry{Struct./global}
+
+\nextgroupplot[title={Same-case full}]
+\addplot+[bm25] coordinates {
+  (1,1.112812) (5,11.114214) (10,28.615744) (20,55.206803)
+};
+\addplot+[e5] coordinates {
+  (1,2.055815) (5,15.471281) (10,32.818746) (20,56.410669)
+};
+\addplot+[mbbase] coordinates {
+  (1,2.417991) (5,11.210595) (10,25.400496) (20,40.145617)
+};
+\addplot+[random] coordinates {
+  (1,2.462822) (5,11.581394) (10,21.546373) (20,37.776003)
+};
+\addplot+[flat,localunique] coordinates {
+  (1,7.072735) (5,27.824040) (10,46.417132) (20,67.978451)
+};
+\addplot+[flat,globaluniform] coordinates {
+  (1,5.897641) (5,28.042755) (10,46.508655) (20,66.982640)
+};
+\addplot+[structured,localunique] coordinates {
+  (1,7.673136) (5,28.457545) (10,44.191593) (20,62.699409)
+};
+\addplot+[structured,globaluniform] coordinates {
+  (1,7.065649) (5,29.456380) (10,45.065447) (20,63.003261)
+};
+
+\nextgroupplot[title={Fold-global (primary)}]
+\addplot+[bm25] coordinates {
+  (1,1.112812) (5,9.901473) (10,22.139123) (20,42.485491)
+};
+\addplot+[e5] coordinates {
+  (1,1.520100) (5,12.646550) (10,23.375675) (20,35.650964)
+};
+\addplot+[mbbase] coordinates {
+  (1,0.000000) (5,1.219929) (10,2.498662) (20,4.677931)
+};
+\addplot+[random] coordinates {
+  (1,0.246540) (5,1.226089) (10,2.435818) (20,4.807270)
+};
+\addplot+[flat,localunique] coordinates {
+  (1,0.777661) (5,3.864082) (10,8.977222) (20,15.672040)
+};
+\addplot+[flat,globaluniform] coordinates {
+  (1,0.754768) (5,3.704939) (10,9.016966) (20,15.584534)
+};
+\addplot+[structured,localunique] coordinates {
+  (1,1.363954) (5,4.064554) (10,7.556961) (20,12.996220)
+};
+\addplot+[structured,globaluniform] coordinates {
+  (1,1.369992) (5,3.739655) (10,7.233241) (20,13.222023)
+};
+
+\end{groupplot}
+\end{tikzpicture}
+
+\vspace{0.2em}
+\makebox[\columnwidth][c]{\pgfplotslegendfromname{retrievallegend}}
+
+\caption{Case-macro Hit@$k$ across three retrieval candidate regimes using five
+case-disjoint outer folds. Each of the 42 cases is evaluated exactly once as
+held-out test data. Query outcomes are first averaged within case; for the
+fine-tuned systems, matched seeds 17, 29, and 43 are then averaged within case
+before averaging across cases. Flat and Struct. denote flat-masked and
+structured query representations, while local and global denote local-unique
+and global-uniform negative sampling. Random is the case-macro analytic
+probability that a uniformly sampled top-$k$ set contains at least one gold
+passage. The context-excluded fold-global robustness regime is not shown.}
+\label{fig:retrieval_curves}
+\end{figure}
